@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Enable version updates for Composer (PHP)
+  - package-ecosystem: "composer"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    # Open pull requests for version updates
+    open-pull-requests-limit: 10
+    # Group updates to reduce PR noise
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+    # Labels to apply to pull requests
+    labels:
+      - "dependencies"
+      - "composer"
+    # Commit message preferences
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    # Ignore specific dependencies if needed (uncomment and modify as needed)
+    # ignore:
+    #   - dependency-name: "some/package"
+    #     update-types: ["version-update:semver-major"]
+
