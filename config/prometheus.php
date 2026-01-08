@@ -49,9 +49,7 @@ return [
     | PROMETHEUS_ALLOWED_IPS=10.0.0.1,10.0.0.2
     |
     */
-    'allowed_ips' => array_filter(
-        array_map('trim', explode(',', env('PROMETHEUS_ALLOWED_IPS', '')))
-    ),
+    'allowed_ips' => env('PROMETHEUS_ALLOWED_IPS', ''),
 
     /*
     |--------------------------------------------------------------------------

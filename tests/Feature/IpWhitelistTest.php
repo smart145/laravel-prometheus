@@ -43,5 +43,23 @@ class IpWhitelistTest extends TestCase
 
         $response->assertStatus(200);
     }
+
+    public function test_string_allowed_ips_is_parsed_correctly(): void
+    {
+        config(['prometheus.allowed_ips' => '127.0.0.1, 10.0.0.1']);
+
+        $response = $this->get('/prometheus');
+
+        $response->assertStatus(200);
+    }
+
+    public function test_string_blocked_ip_returns_403(): void
+    {
+        config(['prometheus.allowed_ips' => '10.0.0.1, 10.0.0.2']);
+
+        $response = $this->get('/prometheus');
+
+        $response->assertStatus(403);
+    }
 }
 

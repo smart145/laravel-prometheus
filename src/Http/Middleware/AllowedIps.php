@@ -20,6 +20,11 @@ class AllowedIps
     {
         $allowedIps = config('prometheus.allowed_ips', []);
 
+        // Ensure allowedIps is an array (handles string input from env)
+        if (is_string($allowedIps)) {
+            $allowedIps = array_filter(array_map('trim', explode(',', $allowedIps)));
+        }
+
         // Empty list means allow all
         if (empty($allowedIps)) {
             return $next($request);
