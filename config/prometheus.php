@@ -153,5 +153,20 @@ return [
     */
     'label_mismatch_behavior' => env('PROMETHEUS_LABEL_MISMATCH_BEHAVIOR', 'throw'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Auto-Clean Corrupted Samples
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, corrupted samples with label mismatches found in Redis
+    | during metric collection will be automatically deleted. This cleans up
+    | stale or invalid data that could cause rendering errors.
+    |
+    | A warning is logged for each removed sample with details about the
+    | mismatch, helping you identify and fix the root cause.
+    |
+    */
+    'auto_clean_corrupted_samples' => env('PROMETHEUS_AUTO_CLEAN_CORRUPTED', true),
+
 ];
 

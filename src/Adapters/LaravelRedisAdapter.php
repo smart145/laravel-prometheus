@@ -142,14 +142,20 @@ class LaravelRedisAdapter implements Adapter
                 $sampleValue = (float) ($value['value'] ?? 0);
                 $timestamp = isset($value['timestamp']) ? (int) $value['timestamp'] : null;
 
-                // Validate label count matches - skip corrupted samples
+                // Validate label count matches - skip (and optionally delete) corrupted samples
                 if (count($labelNames) !== count($labelValues)) {
-                    Log::warning('Prometheus: Skipping corrupted sample with label mismatch', [
+                    Log::warning('Prometheus: Corrupted sample with label mismatch', [
                         'metric' => $meta['name'],
                         'expected_labels' => $labelNames,
                         'actual_values' => $labelValues,
                         'sample_key' => $sampleKey,
+                        'action' => config('prometheus.auto_clean_corrupted_samples', true) ? 'deleted' : 'skipped',
                     ]);
+
+                    // Delete the corrupted sample from Redis if auto-clean is enabled
+                    if (config('prometheus.auto_clean_corrupted_samples', true)) {
+                        $this->redis()->command('del', [$sampleKey]);
+                    }
 
                     continue;
                 }
