@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Smart145\Prometheus\Tests\Unit;
 
+use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use Smart145\Prometheus\Tests\TestCase;
 
 class CounterTest extends TestCase
@@ -83,6 +85,77 @@ class CounterTest extends TestCase
         // Just verify the counter was created successfully
         $output = $prometheus->render();
         $this->assertStringContainsString('test_auto_timestamp_counter', $output);
+    }
+
+    public function test_counter_throws_on_label_count_mismatch_too_few(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Label count mismatch');
+
+        // Define counter with 2 labels but provide 0 values
+        $prometheus->counter('requests_total', 'Total requests', ['method', 'status'])
+            ->inc([]);
+    }
+
+    public function test_counter_throws_on_label_count_mismatch_too_many(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Label count mismatch');
+
+        // Define counter with 1 label but provide 2 values
+        $prometheus->counter('requests_total', 'Total requests', ['method'])
+            ->inc(['GET', '200']);
+    }
+
+    public function test_counter_throws_on_label_mismatch_with_timestamp(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('expected 2 labels (method, status) but got 1 values (GET)');
+
+        // Define counter with 2 labels but provide 1 value, with timestamp
+        $prometheus->counter('requests_total', 'Total requests', ['method', 'status'])
+            ->withTimestamp()
+            ->inc(['GET']);
+    }
+
+    public function test_counter_label_mismatch_logs_warning_when_configured(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'log']);
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(fn ($message) => str_contains($message, 'Label count mismatch'));
+
+        $prometheus = $this->freshPrometheus();
+
+        // This should not throw, but should log and skip
+        $prometheus->counter('requests_total', 'Total requests', ['method', 'status'])
+            ->inc([]);
+
+        // Metric should not be recorded
+        $output = $prometheus->render();
+        $this->assertStringNotContainsString('requests_total', $output);
+    }
+
+    public function test_counter_label_mismatch_silently_skips_when_configured(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'ignore']);
+
+        $prometheus = $this->freshPrometheus();
+
+        // This should not throw and not log
+        $prometheus->counter('requests_total', 'Total requests', ['method', 'status'])
+            ->inc([]);
+
+        // Metric should not be recorded
+        $output = $prometheus->render();
+        $this->assertStringNotContainsString('requests_total', $output);
     }
 }
 

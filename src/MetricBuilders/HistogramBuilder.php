@@ -12,6 +12,8 @@ use Prometheus\Storage\Adapter;
  */
 class HistogramBuilder
 {
+    use ValidatesLabels;
+
     private ?int $timestamp = null;
 
     public function __construct(
@@ -40,6 +42,10 @@ class HistogramBuilder
      */
     public function observe(float $value, array $labelValues = []): void
     {
+        if (! $this->validateLabels($this->histogram->getName(), $this->histogram->getLabelNames(), $labelValues)) {
+            return;
+        }
+
         if ($this->timestamp !== null) {
             // Use adapter directly for timestamp support
             $this->adapter->updateHistogram([

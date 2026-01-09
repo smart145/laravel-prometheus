@@ -129,5 +129,29 @@ return [
         'value' => env('PROMETHEUS_WIPE_VALUE', '1'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Label Mismatch Behavior
+    |--------------------------------------------------------------------------
+    |
+    | Controls how the package handles label count mismatches when recording
+    | metrics. A mismatch occurs when the number of label values provided
+    | doesn't match the number of label names defined for the metric.
+    |
+    | Supported: "throw", "log", "ignore"
+    |
+    | - throw: Throw an InvalidArgumentException immediately (default)
+    |          Best for development to catch bugs early.
+    |
+    | - log: Log a warning and skip recording the metric.
+    |        The metric will not be stored, but the request continues.
+    |        Best for production if you want resilience over strictness.
+    |
+    | - ignore: Silently skip recording the metric without logging.
+    |           Use with caution as bugs may go unnoticed.
+    |
+    */
+    'label_mismatch_behavior' => env('PROMETHEUS_LABEL_MISMATCH_BEHAVIOR', 'throw'),
+
 ];
 

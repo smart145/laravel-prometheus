@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Smart145\Prometheus\Tests\Unit;
 
+use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use Smart145\Prometheus\Tests\TestCase;
 
 class HistogramTest extends TestCase
@@ -96,6 +98,77 @@ class HistogramTest extends TestCase
         $this->assertStringContainsString('test_size_bytes_bucket{le="50"} 2', $output);
         $this->assertStringContainsString('test_size_bytes_bucket{le="100"} 3', $output);
         $this->assertStringContainsString('test_size_bytes_bucket{le="+Inf"} 3', $output);
+    }
+
+    public function test_histogram_throws_on_label_count_mismatch_too_few(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Label count mismatch');
+
+        // Define histogram with 2 labels but provide 0 values
+        $prometheus->histogram('http_duration_seconds', 'HTTP duration', ['method', 'status'])
+            ->observe(0.5, []);
+    }
+
+    public function test_histogram_throws_on_label_count_mismatch_too_many(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Label count mismatch');
+
+        // Define histogram with 1 label but provide 3 values
+        $prometheus->histogram('latency_seconds', 'Latency', ['method'])
+            ->observe(0.1, ['GET', '200', 'extra']);
+    }
+
+    public function test_histogram_throws_on_label_mismatch_with_timestamp(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('expected 2 labels (method, status) but got 1 values (POST)');
+
+        // Define histogram with 2 labels but provide 1 value, with timestamp
+        $prometheus->histogram('http_duration_seconds', 'HTTP duration', ['method', 'status'])
+            ->withTimestamp()
+            ->observe(0.5, ['POST']);
+    }
+
+    public function test_histogram_label_mismatch_logs_warning_when_configured(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'log']);
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(fn ($message) => str_contains($message, 'Label count mismatch'));
+
+        $prometheus = $this->freshPrometheus();
+
+        // This should not throw, but should log and skip
+        $prometheus->histogram('http_duration_seconds', 'HTTP duration', ['method', 'status'])
+            ->observe(0.5, []);
+
+        // Metric should not be recorded
+        $output = $prometheus->render();
+        $this->assertStringNotContainsString('http_duration_seconds', $output);
+    }
+
+    public function test_histogram_label_mismatch_silently_skips_when_configured(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'ignore']);
+
+        $prometheus = $this->freshPrometheus();
+
+        // This should not throw and not log
+        $prometheus->histogram('http_duration_seconds', 'HTTP duration', ['method', 'status'])
+            ->observe(0.5, []);
+
+        // Metric should not be recorded
+        $output = $prometheus->render();
+        $this->assertStringNotContainsString('http_duration_seconds', $output);
     }
 }
 

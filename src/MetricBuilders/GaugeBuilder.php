@@ -13,6 +13,8 @@ use Smart145\Prometheus\PrometheusService;
  */
 class GaugeBuilder
 {
+    use ValidatesLabels;
+
     private ?int $timestamp = null;
 
     public function __construct(
@@ -41,6 +43,10 @@ class GaugeBuilder
      */
     public function set(float $value, array $labelValues = []): void
     {
+        if (! $this->validateLabels($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues)) {
+            return;
+        }
+
         if ($this->timestamp !== null) {
             // Use adapter directly for timestamp support
             $this->adapter->updateGauge([
@@ -76,6 +82,10 @@ class GaugeBuilder
      */
     public function incBy(int|float $value, array $labelValues = []): void
     {
+        if (! $this->validateLabels($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues)) {
+            return;
+        }
+
         if ($this->timestamp !== null) {
             $this->adapter->updateGauge([
                 'type' => Gauge::TYPE,

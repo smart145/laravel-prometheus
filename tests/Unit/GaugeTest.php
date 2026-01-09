@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Smart145\Prometheus\Tests\Unit;
 
+use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use Smart145\Prometheus\Tests\TestCase;
 
 class GaugeTest extends TestCase
@@ -118,6 +120,76 @@ class GaugeTest extends TestCase
         $this->assertEquals(1, $callCount);
         $this->assertStringContainsString('test_dynamic_value', $output);
         $this->assertStringContainsString('42', $output);
+    }
+
+    public function test_gauge_set_throws_on_label_count_mismatch(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Label count mismatch');
+
+        // Define gauge with 2 labels but provide 0 values
+        $prometheus->gauge('queue_size', 'Queue size', ['queue', 'priority'])
+            ->set(15, []);
+    }
+
+    public function test_gauge_inc_throws_on_label_count_mismatch(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Label count mismatch');
+
+        // Define gauge with 1 label but provide 2 values
+        $prometheus->gauge('connections', 'Active connections', ['server'])
+            ->inc(['server1', 'extra']);
+    }
+
+    public function test_gauge_incby_throws_on_label_count_mismatch(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('expected 2 labels');
+
+        // Define gauge with 2 labels but provide 1 value
+        $prometheus->gauge('score', 'Player score', ['player', 'game'])
+            ->incBy(50, ['player1']);
+    }
+
+    public function test_gauge_label_mismatch_logs_warning_when_configured(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'log']);
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(fn ($message) => str_contains($message, 'Label count mismatch'));
+
+        $prometheus = $this->freshPrometheus();
+
+        // This should not throw, but should log and skip
+        $prometheus->gauge('queue_size', 'Queue size', ['queue', 'priority'])
+            ->set(15, []);
+
+        // Metric should not be recorded
+        $output = $prometheus->render();
+        $this->assertStringNotContainsString('queue_size', $output);
+    }
+
+    public function test_gauge_label_mismatch_silently_skips_when_configured(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'ignore']);
+
+        $prometheus = $this->freshPrometheus();
+
+        // This should not throw and not log
+        $prometheus->gauge('queue_size', 'Queue size', ['queue', 'priority'])
+            ->set(15, []);
+
+        // Metric should not be recorded
+        $output = $prometheus->render();
+        $this->assertStringNotContainsString('queue_size', $output);
     }
 }
 

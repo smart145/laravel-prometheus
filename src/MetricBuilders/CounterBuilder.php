@@ -12,6 +12,8 @@ use Prometheus\Storage\Adapter;
  */
 class CounterBuilder
 {
+    use ValidatesLabels;
+
     private ?int $timestamp = null;
 
     public function __construct(
@@ -49,6 +51,10 @@ class CounterBuilder
      */
     public function incBy(int|float $value, array $labelValues = []): void
     {
+        if (! $this->validateLabels($this->counter->getName(), $this->counter->getLabelNames(), $labelValues)) {
+            return;
+        }
+
         if ($this->timestamp !== null) {
             // Use adapter directly for timestamp support
             $this->adapter->updateCounter([

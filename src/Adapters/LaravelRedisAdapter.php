@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Smart145\Prometheus\Adapters;
 
 use Illuminate\Redis\Connections\Connection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Prometheus\Counter;
 use Prometheus\Gauge;
@@ -118,6 +119,7 @@ class LaravelRedisAdapter implements Adapter
 
             $baseKey = str_replace(':meta', '', $metaKey);
             $samples = [];
+            $labelNames = json_decode($meta['labelNames'] ?? '[]', true);
 
             // Get all sample keys for this metric
             $rawSampleKeys = $this->redis()->command('keys', [$baseKey . ':*']);
@@ -140,6 +142,18 @@ class LaravelRedisAdapter implements Adapter
                 $sampleValue = (float) ($value['value'] ?? 0);
                 $timestamp = isset($value['timestamp']) ? (int) $value['timestamp'] : null;
 
+                // Validate label count matches - skip corrupted samples
+                if (count($labelNames) !== count($labelValues)) {
+                    Log::warning('Prometheus: Skipping corrupted sample with label mismatch', [
+                        'metric' => $meta['name'],
+                        'expected_labels' => $labelNames,
+                        'actual_values' => $labelValues,
+                        'sample_key' => $sampleKey,
+                    ]);
+
+                    continue;
+                }
+
                 if ($type === Histogram::TYPE) {
                     $samples = array_merge($samples, $this->collectHistogramSamples($sampleKey, $labelValues, $meta, $timestamp));
                 } else {
@@ -158,7 +172,7 @@ class LaravelRedisAdapter implements Adapter
                     'name' => $meta['name'],
                     'type' => $type,
                     'help' => $meta['help'] ?? '',
-                    'labelNames' => json_decode($meta['labelNames'] ?? '[]', true),
+                    'labelNames' => $labelNames,
                     'samples' => $samples,
                 ]);
             }
