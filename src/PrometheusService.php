@@ -33,6 +33,14 @@ class PrometheusService
 
     private array $gaugeCallbacks = [];
 
+    /**
+     * In-memory fallback for the last scrape timestamp.
+     *
+     * Used when the storage adapter doesn't persist scrape times (e.g. the
+     * InMemory adapter). Not shared across requests.
+     */
+    private ?int $lastScrapeTime = null;
+
     public function __construct(?Adapter $adapter = null)
     {
         $this->adapter = $adapter ?? $this->createAdapter();
@@ -250,6 +258,37 @@ class PrometheusService
     public function wipe(): void
     {
         $this->adapter->wipeStorage();
+    }
+
+    /**
+     * Record the time of the most recent metrics scrape.
+     *
+     * This is the "consumed" signal used by the cleanup command to detect
+     * when metrics have gone unscraped for too long.
+     */
+    public function recordScrape(?int $time = null): void
+    {
+        $time ??= time();
+
+        if ($this->adapter instanceof LaravelRedisAdapter) {
+            $this->adapter->recordScrape($time);
+
+            return;
+        }
+
+        $this->lastScrapeTime = $time;
+    }
+
+    /**
+     * Get the timestamp of the most recent metrics scrape, or null if unknown.
+     */
+    public function lastScrapeTime(): ?int
+    {
+        if ($this->adapter instanceof LaravelRedisAdapter) {
+            return $this->adapter->getLastScrapeTime();
+        }
+
+        return $this->lastScrapeTime;
     }
 }
 

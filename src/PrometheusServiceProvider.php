@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Smart145\Prometheus;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\ServiceProvider;
+use Smart145\Prometheus\Console\Commands\CleanupMetricsCommand;
 
 class PrometheusServiceProvider extends ServiceProvider
 {
@@ -30,6 +32,19 @@ class PrometheusServiceProvider extends ServiceProvider
         ], 'prometheus-config');
 
         $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                CleanupMetricsCommand::class,
+            ]);
+        }
+
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            if (config('prometheus.cleanup.enabled', true)) {
+                $schedule->command('prometheus:cleanup')
+                    ->cron(config('prometheus.cleanup.schedule', '0 * * * *'));
+            }
+        });
     }
 }
 

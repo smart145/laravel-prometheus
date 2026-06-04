@@ -168,5 +168,30 @@ return [
     */
     'auto_clean_corrupted_samples' => env('PROMETHEUS_AUTO_CLEAN_CORRUPTED', true),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Idle Cleanup
+    |--------------------------------------------------------------------------
+    |
+    | Metrics are normally cleared when a Prometheus scrape hits the endpoint.
+    | If nothing scrapes them, the storage keeps growing until it can crash
+    | Redis. The `prometheus:cleanup` command wipes all metrics once they've
+    | gone unscraped for longer than the idle threshold.
+    |
+    | - enabled: When true, the package auto-registers a scheduled task that
+    |   runs the cleanup command. Set to false to schedule it yourself.
+    | - idle_threshold: Seconds without a scrape before metrics are wiped.
+    | - schedule: Cron expression for how often the cleanup check runs.
+    |
+    | Note: The check only fires if your application runs Laravel's scheduler
+    | (e.g. `schedule:run` via cron or `schedule:work`).
+    |
+    */
+    'cleanup' => [
+        'enabled' => env('PROMETHEUS_CLEANUP_ENABLED', true),
+        'idle_threshold' => (int) env('PROMETHEUS_CLEANUP_IDLE_THRESHOLD', 3600),
+        'schedule' => env('PROMETHEUS_CLEANUP_SCHEDULE', '0 * * * *'),
+    ],
+
 ];
 

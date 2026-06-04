@@ -382,6 +382,35 @@ class LaravelRedisAdapter implements Adapter
     }
 
     /**
+     * Record the time of the most recent metrics scrape.
+     *
+     * This is the "consumed" signal used by the cleanup command to detect
+     * when metrics have gone unscraped for too long.
+     */
+    public function recordScrape(?int $time = null): void
+    {
+        $this->redis()->command('set', [$this->lastScrapeKey(), $time ?? time()]);
+    }
+
+    /**
+     * Get the timestamp of the most recent metrics scrape, or null if unknown.
+     */
+    public function getLastScrapeTime(): ?int
+    {
+        $value = $this->redis()->command('get', [$this->lastScrapeKey()]);
+
+        return $value === null || $value === false ? null : (int) $value;
+    }
+
+    /**
+     * Generate the key used to store the last scrape timestamp.
+     */
+    private function lastScrapeKey(): string
+    {
+        return self::PREFIX . 'last_scrape';
+    }
+
+    /**
      * Generate the meta key for a metric.
      */
     private function metaKey(string $type, array $data): string

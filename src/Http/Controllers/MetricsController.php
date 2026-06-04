@@ -44,6 +44,9 @@ class MetricsController
             $this->prometheus->wipe();
         }
 
+        // Refresh the idle clock: this scrape "consumed" the metrics.
+        $this->prometheus->recordScrape();
+
         return response($content, 200, [
             'Content-Type' => $this->prometheus->getContentType(),
         ]);
