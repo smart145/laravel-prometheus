@@ -33,6 +33,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # Laravel 11 releases in range have security advisories; allow them for compatibility tests.
+          composer config policy.advisories.block false
           composer require "illuminate/support:^${{ matrix.laravel }}" "illuminate/routing:^${{ matrix.laravel }}" "illuminate/http:^${{ matrix.laravel }}" --no-update --no-interaction
           composer update --prefer-dist --no-interaction --no-progress
 
