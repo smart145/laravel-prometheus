@@ -135,6 +135,44 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Wipe Gauges
+    |--------------------------------------------------------------------------
+    |
+    | Controls whether a scrape that wipes (auto_wipe or the wipe parameter)
+    | also wipes the gauges. Redis storage only.
+    |
+    | - true: The scrape wipes all metrics (default).
+    | - false: The scrape wipes counters and histograms and keeps the gauges.
+    |          A gauge is a current value, so inc()/dec() and set() stay
+    |          correct across scrapes.
+    |
+    | A full wipe (`php artisan prometheus:cleanup --force`, the idle cleanup
+    | and `Prometheus::wipe()`) always removes the gauges too.
+    |
+    */
+    'wipe_gauges' => env('PROMETHEUS_WIPE_GAUGES', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Gauge TTL
+    |--------------------------------------------------------------------------
+    |
+    | Seconds after which a gauge sample that nobody wrote is removed during
+    | a scrape. Redis storage only. 0 keeps gauge samples until a wipe.
+    |
+    | Use it with wipe_gauges = false, so that a gauge series that the
+    | application no longer writes (an old host, queue or tenant) does not
+    | stay in Redis and in the output forever. Set it longer than the longest
+    | time between two writes of a gauge that is still in use.
+    |
+    | Samples written by a version without this option have no write time.
+    | They are kept until their next write.
+    |
+    */
+    'gauge_ttl' => (int) env('PROMETHEUS_GAUGE_TTL', 0),
+
+    /*
+    |--------------------------------------------------------------------------
     | Label Mismatch Behavior
     |--------------------------------------------------------------------------
     |

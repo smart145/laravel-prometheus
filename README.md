@@ -58,6 +58,12 @@ PROMETHEUS_WIPE_PARAM_ENABLED=true
 PROMETHEUS_WIPE_PARAM=wipe
 PROMETHEUS_WIPE_VALUE=1
 
+# Keep gauges when a scrape wipes (Redis storage): set to false
+PROMETHEUS_WIPE_GAUGES=true
+
+# Remove a gauge sample that was not written for this many seconds (0 = never)
+PROMETHEUS_GAUGE_TTL=0
+
 # What to do with a recording that cannot be stored: throw, log, ignore
 PROMETHEUS_LABEL_MISMATCH_BEHAVIOR=throw
 ```
@@ -90,8 +96,11 @@ In wipe mode:
 
 - Use one scraper only. Each scrape removes the data, so a second Prometheus
   server or a manual request with the wipe parameter takes data away.
-- A gauge that uses `inc()` / `dec()` restarts from zero after a wipe. Use
-  `set()` or a gauge callback for a value that must survive a wipe.
+- By default the wipe removes gauges too. A gauge that uses `inc()` / `dec()`
+  then restarts from zero, and a `set()` gauge is absent until its next
+  write. Set `PROMETHEUS_WIPE_GAUGES=false` to keep the gauges: the scrape
+  then wipes counters and histograms only, and no value is calculated at
+  scrape time.
 - The read and the wipe are one Redis step. A recording that arrives during a
   scrape is in that scrape or in the next one.
 
@@ -116,6 +125,18 @@ PROMETHEUS_WIPE_VALUE=yes
 PROMETHEUS_WIPE_PARAM=reset
 PROMETHEUS_WIPE_VALUE=1
 ```
+
+**Keep gauges, and remove the ones that are no longer written:**
+```bash
+PROMETHEUS_WIPE_GAUGES=false
+# A gauge sample with no write for 1 hour is removed in the next scrape
+PROMETHEUS_GAUGE_TTL=3600
+```
+Gauges are removed in three ways:
+
+- `PROMETHEUS_GAUGE_TTL`: one gauge sample, when nobody wrote it for that time.
+- `php artisan prometheus:cleanup --force` or `Prometheus::wipe()`: all metrics, gauges included.
+- The idle cleanup: all metrics, when nothing scraped for the idle threshold.
 
 **Disable wipe entirely:**
 ```bash

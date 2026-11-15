@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Laravel 13 support
 - `PrometheusService::renderAndWipe()` and `LaravelRedisAdapter::collectAndWipe()`: read and wipe in one Redis step
+- `wipe_gauges` option (`PROMETHEUS_WIPE_GAUGES`, default `true`): set it to `false` so a scrape that wipes keeps the gauges (Redis storage)
+- `gauge_ttl` option (`PROMETHEUS_GAUGE_TTL`, default `0` = off): remove a gauge sample that was not written for this many seconds (Redis storage)
 - Storage tests that run against a real Redis server with the `phpredis` and `predis` clients
 
 ### Changed

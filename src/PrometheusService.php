@@ -199,7 +199,9 @@ class PrometheusService
      * Render all metrics, then wipe them from storage.
      *
      * With Redis storage the read and the wipe are one step, so a recording
-     * that arrives during the scrape is not lost.
+     * that arrives during the scrape is not lost. Redis storage keeps the
+     * gauges when `prometheus.wipe_gauges` is false. InMemory storage wipes
+     * all metrics.
      */
     public function renderAndWipe(): string
     {
@@ -210,7 +212,9 @@ class PrometheusService
     {
         // Use our adapter's collect method which returns our MetricFamilySamples with timestamp support
         if ($this->adapter instanceof LaravelRedisAdapter) {
-            $samples = $wipe ? $this->adapter->collectAndWipe() : $this->adapter->collect();
+            $samples = $wipe
+                ? $this->adapter->collectAndWipe(true, (bool) config('prometheus.wipe_gauges', true))
+                : $this->adapter->collect();
         } else {
             // For InMemory adapter, convert promphp samples to our format
             $samples = $this->convertSamples($this->registry->getMetricFamilySamples());

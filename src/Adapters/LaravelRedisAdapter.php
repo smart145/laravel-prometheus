@@ -52,7 +52,7 @@ class LaravelRedisAdapter implements Adapter
      *
      * KEYS: index, meta, sample index, sample.
      * ARGV: type, name, help, labelNames, labelValues, sample hash, command
-     *       (set|inc|observe), value, timestamp, buckets, bucket field.
+     *       (set|inc|observe), value, timestamp, buckets, bucket field, time now.
      * Returns "OK", or the stored type if the name belongs to another type.
      */
     private const WRITE_SCRIPT = <<<'LUA'
@@ -68,7 +68,7 @@ if ARGV[10] ~= '' then
     redis.call('hset', KEYS[2], 'buckets', ARGV[10])
 end
 redis.call('sadd', KEYS[3], ARGV[6])
-redis.call('hmset', KEYS[4], 'labelNames', ARGV[4], 'labelValues', ARGV[5])
+redis.call('hmset', KEYS[4], 'labelNames', ARGV[4], 'labelValues', ARGV[5], 'updated', ARGV[12])
 if ARGV[7] == 'set' then
     redis.call('hset', KEYS[4], 'value', ARGV[8])
 elseif ARGV[7] == 'inc' then
@@ -89,15 +89,21 @@ LUA;
      * Read every sample and, if asked, delete them in the same step.
      *
      * KEYS: index, schema marker.
-     * ARGV: index key without Laravel's prefix, key prefix, wipe (1|0).
+     * ARGV: index key without Laravel's prefix, key prefix, wipe (0 = nothing,
+     *       1 = all, 2 = all but gauges), gauge TTL in seconds (0 = off), time now.
      * Returns a list of {type, name, meta, {{sample hash, sample}, ...}}.
+     *
+     * A gauge sample that was not written for longer than the gauge TTL is
+     * deleted and not returned.
      *
      * The first run after an upgrade from version 1.0 finds the samples that
      * have no index entry (one KEYS scan) and adds them to the indexes.
      */
     private const COLLECT_SCRIPT = <<<'LUA'
 local root = string.sub(KEYS[1], 1, #KEYS[1] - #ARGV[1]) .. ARGV[2]
-local wipe = ARGV[3] == '1'
+local wipeMode = ARGV[3]
+local gaugeTtl = tonumber(ARGV[4])
+local now = tonumber(ARGV[5])
 
 if redis.call('exists', KEYS[2]) == 0 then
     local pattern = string.gsub(root, '[%*%?%[%]\\]', '\\%0')
@@ -124,23 +130,35 @@ local index = redis.call('hgetall', KEYS[1])
 for i = 1, #index, 2 do
     local name, metricType = index[i], index[i + 1]
     local base = root .. metricType .. ':' .. name .. ':'
+    local wipe = wipeMode == '1' or (wipeMode == '2' and metricType ~= 'gauge')
     local samples = {}
+    local kept = 0
     for _, hash in ipairs(redis.call('smembers', base .. 'index')) do
-        local sample = redis.call('hgetall', base .. hash)
-        if #sample > 0 then
-            samples[#samples + 1] = {hash, sample}
+        local expired = false
+        if metricType == 'gauge' and gaugeTtl > 0 then
+            local updated = tonumber(redis.call('hget', base .. hash, 'updated'))
+            expired = updated ~= nil and now - updated > gaugeTtl
         end
-        if wipe then
+        if expired then
             redis.call('del', base .. hash)
+            redis.call('srem', base .. 'index', hash)
+        else
+            local sample = redis.call('hgetall', base .. hash)
+            if #sample > 0 then
+                samples[#samples + 1] = {hash, sample}
+            end
+            if wipe then
+                redis.call('del', base .. hash)
+            else
+                kept = kept + 1
+            end
         end
     end
     metrics[#metrics + 1] = {metricType, name, redis.call('hgetall', base .. 'meta'), samples}
-    if wipe then
+    if wipe or kept == 0 then
         redis.call('del', base .. 'meta', base .. 'index')
+        redis.call('hdel', KEYS[1], name)
     end
-end
-if wipe then
-    redis.call('del', KEYS[1])
 end
 return metrics
 LUA;
@@ -185,7 +203,7 @@ LUA;
      */
     public function collect(bool $sortMetrics = true): array
     {
-        return $this->collectFromRedis($sortMetrics, false);
+        return $this->collectFromRedis($sortMetrics, '0');
     }
 
     /**
@@ -194,17 +212,19 @@ LUA;
      * A recording that arrives during the scrape is either in the returned
      * samples or stays in storage for the next scrape. It is never lost.
      *
+     * @param  bool  $wipeGauges  False keeps the gauges: a gauge is a current
+     *                            value, not a count of events since the last scrape.
      * @return MetricFamilySamples[]
      */
-    public function collectAndWipe(bool $sortMetrics = true): array
+    public function collectAndWipe(bool $sortMetrics = true, bool $wipeGauges = true): array
     {
-        return $this->collectFromRedis($sortMetrics, true);
+        return $this->collectFromRedis($sortMetrics, $wipeGauges ? '1' : '2');
     }
 
     /**
      * @return MetricFamilySamples[]
      */
-    private function collectFromRedis(bool $sortMetrics, bool $wipe): array
+    private function collectFromRedis(bool $sortMetrics, string $wipeMode): array
     {
         $result = $this->redis()->eval(
             self::COLLECT_SCRIPT,
@@ -213,7 +233,9 @@ LUA;
             self::SCHEMA_KEY,
             self::INDEX_KEY,
             self::PREFIX,
-            $wipe ? '1' : '0'
+            $wipeMode,
+            (string) max(0, (int) config('prometheus.gauge_ttl', 0)),
+            (string) time()
         );
 
         if (! is_array($result)) {
@@ -233,7 +255,7 @@ LUA;
                     $meta,
                     (string) $hash,
                     $this->toAssociative($rawSample),
-                    $wipe
+                    $wipeMode === '1' || ($wipeMode === '2' && $type !== Gauge::TYPE)
                 ));
             }
 
@@ -468,7 +490,8 @@ LUA;
             Number::format($value),
             isset($data['timestamp']) ? (string) (int) $data['timestamp'] : '',
             $buckets,
-            $bucketField
+            $bucketField,
+            (string) time()
         );
 
         $result = is_object($result) && method_exists($result, '__toString') ? (string) $result : $result;

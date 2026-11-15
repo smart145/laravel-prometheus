@@ -31,7 +31,11 @@ Use these words in code, tests, commit messages and PRs.
   `/prometheus`). It renders, maybe wipes, then records the scrape time.
 - **Wipe**: clear all stored samples. Triggered by `auto_wipe` or by the
   wipe query parameter (`wipe_param`). A scrape that wipes uses
-  `renderAndWipe()`: with Redis, the read and the wipe are one step.
+  `renderAndWipe()`: with Redis, the read and the wipe are one step, and
+  `wipe_gauges = false` keeps the gauges. A full wipe (`wipe()`, idle
+  cleanup) removes all metrics.
+- **Gauge TTL**: `prometheus.gauge_ttl`. A scrape removes a Redis gauge
+  sample that was not written for that many seconds.
 - **Index**: the Redis keys that list the stored metrics and samples
   (`PROMETHEUS_index`, `PROMETHEUS_<type>:<name>:index`). The adapter reads
   through the index and never runs `KEYS` in a scrape.

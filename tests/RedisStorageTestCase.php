@@ -363,6 +363,90 @@ abstract class RedisStorageTestCase extends TestCase
         $this->assertSame(1, (int) $this->redis()->command('exists', ['cache:unrelated']));
     }
 
+    public function test_wiping_scrape_keeps_gauges_when_wipe_gauges_is_off(): void
+    {
+        config(['prometheus.wipe_gauges' => false]);
+
+        $prometheus = $this->process();
+        $gauge = $prometheus->gauge('jobs_in_progress', 'Jobs', ['queue']);
+        $gauge->inc(['default']);
+        $gauge->inc(['default']);
+        $gauge->inc(['default']);
+        $prometheus->counter('jobs_total', 'Jobs')->incBy(3);
+        $prometheus->histogram('job_seconds', 'Job', [], [1])->observe(0.5);
+
+        $first = $this->get('/prometheus?wipe=1')->assertOk()->getContent();
+        $gauge->dec(['default']);
+        $gauge->dec(['default']);
+        $second = $this->get('/prometheus?wipe=1')->assertOk()->getContent();
+
+        $this->assertStringContainsString('test_jobs_in_progress{queue="default"} 3', $first);
+        $this->assertStringContainsString("test_jobs_total 3\n", $first);
+        $this->assertStringContainsString('test_jobs_in_progress{queue="default"} 1', $second);
+        $this->assertStringNotContainsString('test_jobs_total', $second);
+        $this->assertStringNotContainsString('test_job_seconds', $second);
+    }
+
+    public function test_wiping_scrape_wipes_gauges_by_default(): void
+    {
+        $prometheus = $this->process();
+        $prometheus->gauge('jobs_in_progress', 'Jobs')->set(3);
+
+        $this->get('/prometheus?wipe=1')->assertOk()->assertSee('test_jobs_in_progress 3');
+        $this->get('/prometheus?wipe=1')->assertOk()->assertDontSee('test_jobs_in_progress');
+    }
+
+    public function test_full_wipe_removes_gauges_when_wipe_gauges_is_off(): void
+    {
+        config(['prometheus.wipe_gauges' => false]);
+
+        $prometheus = $this->process();
+        $prometheus->gauge('jobs_in_progress', 'Jobs')->set(3);
+
+        $this->artisan('prometheus:cleanup', ['--force' => true])->assertSuccessful();
+
+        $this->assertStringNotContainsString('test_jobs_in_progress', $prometheus->render());
+        $this->assertSame([], $this->metricKeys());
+    }
+
+    public function test_gauge_sample_that_is_not_written_for_the_gauge_ttl_is_removed(): void
+    {
+        config(['prometheus.wipe_gauges' => false, 'prometheus.gauge_ttl' => 600]);
+
+        $prometheus = $this->process();
+        $gauge = $prometheus->gauge('workers', 'Workers', ['host']);
+        $gauge->set(4, ['old']);
+        $gauge->set(2, ['new']);
+        $prometheus->gauge('retired', 'Retired')->set(1);
+        $prometheus->counter('old_total', 'Old')->inc();
+
+        // The "old" host and the "retired" gauge were last written 601 seconds ago.
+        $past = (string) (time() - 601);
+        $this->redis()->command('hset', ['PROMETHEUS_gauge:test_workers:' . md5(json_encode(['old'])), 'updated', $past]);
+        $this->redis()->command('hset', ['PROMETHEUS_gauge:test_retired:' . md5(json_encode([])), 'updated', $past]);
+        $this->redis()->command('hset', ['PROMETHEUS_counter:test_old_total:' . md5(json_encode([])), 'updated', $past]);
+
+        $output = $prometheus->render();
+
+        $this->assertStringContainsString('test_workers{host="new"} 2', $output);
+        $this->assertStringNotContainsString('host="old"', $output);
+        $this->assertStringNotContainsString('test_retired', $output);
+        $this->assertStringContainsString("test_old_total 1\n", $output, 'The TTL applies to gauges only');
+        $this->assertSame([], array_values(array_filter(
+            $this->metricKeys(),
+            fn (string $key): bool => str_contains($key, 'test_retired') || str_ends_with($key, md5(json_encode(['old'])))
+        )));
+    }
+
+    public function test_gauge_ttl_is_off_by_default(): void
+    {
+        $prometheus = $this->process();
+        $prometheus->gauge('workers', 'Workers')->set(4);
+        $this->redis()->command('hset', ['PROMETHEUS_gauge:test_workers:' . md5(json_encode([])), 'updated', '1']);
+
+        $this->assertStringContainsString("test_workers 4\n", $prometheus->render());
+    }
+
     /**
      * Keys that hold metric data (the schema marker is bookkeeping, not data).
      *
