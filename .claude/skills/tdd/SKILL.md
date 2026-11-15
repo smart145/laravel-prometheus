@@ -41,10 +41,11 @@ confirm them with the user.
 **Storage is a real seam with two adapters.** `memory` and `redis` take
 different code paths in `PrometheusService::render()`, `recordScrape()` and
 `lastScrapeTime()`. A change in any of those needs a test for each adapter,
-or an explicit note that the Redis path is not covered. The Redis adapter
-tests mock the connection; if behaviour depends on real Redis semantics
-(key prefixes, `KEYS` results, `hGetAll` shapes), say so and offer an
-integration test against a local `redis-server`.
+or an explicit note that the Redis path is not covered.
+`LaravelRedisAdapterTest` mocks the connection; if behaviour depends on real
+Redis semantics (key prefixes, Lua scripts, races), add the test to
+`tests/RedisStorageTestCase.php`, which runs against a real `redis-server`
+with both clients.
 
 ## Anti-patterns
 

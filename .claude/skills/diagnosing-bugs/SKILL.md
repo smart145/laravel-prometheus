@@ -31,10 +31,12 @@ Ways to build one, in this order:
    `(new RenderTextFormat())->render($samples)`, and diff against the
    expected Prometheus text. Keep it in a scratch directory, not in `src/`.
 4. **Real Redis loop** when the bug only shows with `storage = redis`
-   (key prefixes, `KEYS` results, corrupted samples, scrape time). Start
-   `redis-server --port 6390 --daemonize yes`, point a test or script at it,
-   and seed the exact keys the user reported. The unit tests mock Redis, so
-   they cannot catch this class of bug.
+   (key prefixes, Lua scripts, the index, corrupted samples, scrape time).
+   Start `redis-server --port 6390 --daemonize yes`, add a test to
+   `tests/RedisStorageTestCase.php`, and run it with
+   `REDIS_PORT=6390 vendor/bin/phpunit --filter StorageTest`. Seed the exact
+   keys the user reported. `LaravelRedisAdapterTest` mocks Redis, so it
+   cannot catch this class of bug.
 5. **Version matrix loop** when the bug appears on one Laravel or PHP
    version only: reproduce the CI step locally,
    `composer require "illuminate/support:^12.0" "illuminate/routing:^12.0" "illuminate/http:^12.0" --no-update && composer update`,
@@ -78,8 +80,10 @@ Common suspects in this package:
 
 - The two storage adapters take different paths in `render()`,
   `recordScrape()` and `lastScrapeTime()`.
-- Laravel's Redis key prefix (`database.redis.options.prefix`) is not
-  stripped from `KEYS` results.
+- A sample is in Redis but not in the index (`PROMETHEUS_index`,
+  `PROMETHEUS_<type>:<name>:index`), so a scrape does not read it.
+- The Lua scripts build key names from Laravel's Redis key prefix
+  (`database.redis.options.prefix`).
 - `env()` turns `"true"`/`"false"` into booleans (see the `wipe_param`
   comment in `config/prometheus.php`).
 - `PROMETHEUS_ALLOWED_IPS` is a string, not an array.

@@ -47,6 +47,8 @@ class GaugeBuilder
             return;
         }
 
+        $labelValues = $this->normalizeLabelValues($labelValues);
+
         if ($this->timestamp !== null) {
             // Use adapter directly for timestamp support
             $this->adapter->updateGauge([
@@ -82,9 +84,12 @@ class GaugeBuilder
      */
     public function incBy(int|float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues)) {
+        if (! $this->validateLabels($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues)
+            || ! $this->validateIncrement($this->gauge->getName(), $value, true)) {
             return;
         }
+
+        $labelValues = $this->normalizeLabelValues($labelValues);
 
         if ($this->timestamp !== null) {
             $this->adapter->updateGauge([

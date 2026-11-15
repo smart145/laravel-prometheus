@@ -191,5 +191,39 @@ class GaugeTest extends TestCase
         $output = $prometheus->render();
         $this->assertStringNotContainsString('queue_size', $output);
     }
-}
 
+    public function test_failing_gauge_callback_has_no_sample_and_other_metrics_render(): void
+    {
+        $prometheus = $this->freshPrometheus();
+        $calls = 0;
+
+        $prometheus->registerGaugeCallback('users', 'Users', function () use (&$calls) {
+            if (++$calls > 1) {
+                throw new \RuntimeException('database is down');
+            }
+
+            return 42;
+        });
+        $prometheus->registerGaugeCallback('jobs', 'Jobs', fn () => 3, ['queue'], ['default']);
+
+        $this->assertStringContainsString("test_users 42\n", $prometheus->render());
+
+        $second = $prometheus->render();
+
+        $this->assertStringNotContainsString('test_users', $second);
+        $this->assertStringContainsString('test_jobs{queue="default"} 3', $second);
+    }
+
+    public function test_gauge_callback_that_returns_no_number_is_skipped(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $prometheus->registerGaugeCallback('nothing', 'Nothing', fn () => null);
+        $prometheus->registerGaugeCallback('text', 'Text', fn () => '17');
+
+        $output = $prometheus->render();
+
+        $this->assertStringNotContainsString('test_nothing', $output);
+        $this->assertStringContainsString("test_text 17\n", $output);
+    }
+}

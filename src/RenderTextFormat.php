@@ -30,7 +30,7 @@ class RenderTextFormat
         $lines = [];
 
         foreach ($metrics as $metric) {
-            $lines[] = '# HELP ' . $metric->getName() . ' ' . $metric->getHelp();
+            $lines[] = '# HELP ' . $metric->getName() . ' ' . $this->escapeHelp($metric->getHelp());
             $lines[] = '# TYPE ' . $metric->getName() . ' ' . $metric->getType();
 
             foreach ($metric->getSamples() as $sample) {
@@ -68,6 +68,11 @@ class RenderTextFormat
         }
 
         return $output;
+    }
+
+    private function escapeHelp(string $help): string
+    {
+        return str_replace(['\\', "\n"], ['\\\\', '\\n'], $help);
     }
 
     private function escapeLabelValue(string $v): string

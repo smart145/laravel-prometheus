@@ -312,5 +312,22 @@ class RenderTextFormatTest extends TestCase
 
         $this->assertLessThan($zPos, $aPos);
     }
-}
 
+    public function test_help_text_with_newline_and_backslash_stays_on_one_line(): void
+    {
+        $metric = new MetricFamilySamples([
+            'name' => 'test_help',
+            'type' => 'counter',
+            'help' => "line1\nline2 \\ end",
+            'labelNames' => [],
+            'samples' => [['name' => 'test_help', 'labelValues' => [], 'value' => 1]],
+        ]);
+
+        $output = (new RenderTextFormat())->render([$metric]);
+
+        $this->assertSame(
+            "# HELP test_help line1\\nline2 \\\\ end\n# TYPE test_help counter\ntest_help 1\n",
+            $output
+        );
+    }
+}

@@ -34,15 +34,10 @@ class MetricsController
             abort(403, 'Prometheus metrics are disabled');
         }
 
-        // Render all metrics first
-        $content = $this->prometheus->render();
-
-        // Determine if we should wipe
-        $shouldWipe = $this->shouldWipe($request);
-
-        if ($shouldWipe) {
-            $this->prometheus->wipe();
-        }
+        // Render, and wipe in the same storage step if this scrape wipes.
+        $content = $this->shouldWipe($request)
+            ? $this->prometheus->renderAndWipe()
+            : $this->prometheus->render();
 
         // Refresh the idle clock: this scrape "consumed" the metrics.
         $this->prometheus->recordScrape();

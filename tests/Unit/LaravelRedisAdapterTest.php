@@ -8,9 +8,18 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Mockery;
+use Mockery\MockInterface;
+use RuntimeException;
 use Smart145\Prometheus\Adapters\LaravelRedisAdapter;
+use Smart145\Prometheus\RenderTextFormat;
 use Smart145\Prometheus\Tests\TestCase;
 
+/**
+ * Tests of how the adapter reads the reply of its collect script.
+ *
+ * The connection is mocked, so these tests run without a Redis server.
+ * Behaviour that needs real Redis is in RedisStorageTestCase.
+ */
 class LaravelRedisAdapterTest extends TestCase
 {
     protected function tearDown(): void
@@ -19,189 +28,106 @@ class LaravelRedisAdapterTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * A connection whose collect script returns one counter with the given samples.
+     *
+     * @param  array<int, array{0: string, 1: array<int, string>}>  $samples
+     */
+    private function connectionWithCounter(array $samples): MockInterface
+    {
+        $connection = Mockery::mock(Connection::class);
+
+        $connection->shouldReceive('eval')->once()->andReturn([[
+            'counter',
+            'test_metric',
+            ['name', 'test_metric', 'help', 'Test metric', 'labelNames', json_encode(['label1', 'label2'])],
+            $samples,
+        ]]);
+
+        Redis::shouldReceive('connection')->andReturn($connection);
+
+        return $connection;
+    }
+
     public function test_corrupted_samples_are_deleted_when_auto_clean_enabled(): void
     {
         config(['prometheus.auto_clean_corrupted_samples' => true]);
 
-        $connection = Mockery::mock(Connection::class);
+        // The sample has 0 label values, the metric has 2 label names: corrupted.
+        $connection = $this->connectionWithCounter([
+            ['abc123', ['value', '5', 'labelValues', json_encode([])]],
+        ]);
 
-        // Mock finding one metric with metadata for counter type
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_counter:*:meta'])
-            ->andReturn(['PROMETHEUS_counter:test_metric:meta']);
-
-        // Mock empty results for other metric types
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_gauge:*:meta'])
-            ->andReturn([]);
-
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_histogram:*:meta'])
-            ->andReturn([]);
-
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_summary:*:meta'])
-            ->andReturn([]);
-
-        // Mock getting the metadata (expects 2 labels)
-        $connection->shouldReceive('command')
-            ->with('hGetAll', ['PROMETHEUS_counter:test_metric:meta'])
-            ->andReturn([
-                'name' => 'test_metric',
-                'help' => 'Test metric',
-                'labelNames' => json_encode(['label1', 'label2']),
-            ]);
-
-        // Mock finding sample keys
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_counter:test_metric:*'])
-            ->andReturn(['PROMETHEUS_counter:test_metric:abc123']);
-
-        // Mock getting sample data (has 0 label values - corrupted!)
-        $connection->shouldReceive('command')
-            ->with('hGetAll', ['PROMETHEUS_counter:test_metric:abc123'])
-            ->andReturn([
-                'value' => '5',
-                'labelValues' => json_encode([]), // Mismatch: expected 2, got 0
-            ]);
-
-        // Expect the corrupted sample to be DELETED
         $connection->shouldReceive('command')
             ->with('del', ['PROMETHEUS_counter:test_metric:abc123'])
             ->once();
-
-        Redis::shouldReceive('connection')
-            ->andReturn($connection);
+        $connection->shouldReceive('command')
+            ->with('srem', ['PROMETHEUS_counter:test_metric:index', 'abc123'])
+            ->once();
 
         Log::shouldReceive('warning')
             ->once()
-            ->withArgs(fn ($message, $context) => str_contains($message, 'Corrupted sample') &&
-                $context['action'] === 'deleted'
-            );
+            ->with('Prometheus: Corrupted sample with label mismatch', Mockery::on(function ($context) {
+                return $context['metric'] === 'test_metric'
+                    && $context['expected_labels'] === ['label1', 'label2']
+                    && $context['actual_values'] === []
+                    && $context['sample_key'] === 'PROMETHEUS_counter:test_metric:abc123'
+                    && $context['action'] === 'deleted';
+            }));
 
-        $adapter = new LaravelRedisAdapter();
-        $metrics = $adapter->collect();
-
-        // The corrupted sample should not appear in results
-        $this->assertEmpty($metrics);
+        $this->assertSame([], (new LaravelRedisAdapter())->collect());
     }
 
     public function test_corrupted_samples_are_skipped_but_not_deleted_when_auto_clean_disabled(): void
     {
         config(['prometheus.auto_clean_corrupted_samples' => false]);
 
-        $connection = Mockery::mock(Connection::class);
+        $connection = $this->connectionWithCounter([
+            ['abc123', ['value', '5', 'labelValues', json_encode([])]],
+        ]);
 
-        // Mock finding one metric with metadata for counter type
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_counter:*:meta'])
-            ->andReturn(['PROMETHEUS_counter:test_metric:meta']);
-
-        // Mock empty results for other metric types
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_gauge:*:meta'])
-            ->andReturn([]);
-
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_histogram:*:meta'])
-            ->andReturn([]);
-
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_summary:*:meta'])
-            ->andReturn([]);
-
-        // Mock getting the metadata (expects 2 labels)
-        $connection->shouldReceive('command')
-            ->with('hGetAll', ['PROMETHEUS_counter:test_metric:meta'])
-            ->andReturn([
-                'name' => 'test_metric',
-                'help' => 'Test metric',
-                'labelNames' => json_encode(['label1', 'label2']),
-            ]);
-
-        // Mock finding sample keys
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_counter:test_metric:*'])
-            ->andReturn(['PROMETHEUS_counter:test_metric:abc123']);
-
-        // Mock getting sample data (has 0 label values - corrupted!)
-        $connection->shouldReceive('command')
-            ->with('hGetAll', ['PROMETHEUS_counter:test_metric:abc123'])
-            ->andReturn([
-                'value' => '5',
-                'labelValues' => json_encode([]), // Mismatch: expected 2, got 0
-            ]);
-
-        Redis::shouldReceive('connection')
-            ->andReturn($connection);
+        $connection->shouldNotReceive('command');
 
         Log::shouldReceive('warning')
             ->once()
-            ->withArgs(fn ($message, $context) => str_contains($message, 'Corrupted sample') &&
-                $context['action'] === 'skipped'
-            );
+            ->with('Prometheus: Corrupted sample with label mismatch', Mockery::on(function ($context) {
+                return $context['action'] === 'skipped';
+            }));
 
-        $adapter = new LaravelRedisAdapter();
-        $metrics = $adapter->collect();
-
-        // The corrupted sample should not appear in results
-        $this->assertEmpty($metrics);
+        $this->assertSame([], (new LaravelRedisAdapter())->collect());
     }
 
     public function test_valid_samples_are_collected_normally(): void
     {
-        config(['prometheus.auto_clean_corrupted_samples' => true]);
+        $connection = $this->connectionWithCounter([
+            ['bbb', ['value', '2', 'labelValues', json_encode(['b', 'y']), 'labelNames', json_encode(['label1', 'label2'])]],
+            ['aaa', ['value', '5', 'labelValues', json_encode(['a', 'x'])]],
+        ]);
 
-        $connection = Mockery::mock(Connection::class);
+        $connection->shouldNotReceive('command');
+        Log::shouldReceive('warning')->never();
 
-        // Mock finding one metric with metadata for counter type
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_counter:*:meta'])
-            ->andReturn(['PROMETHEUS_counter:test_metric:meta']);
+        $metrics = (new LaravelRedisAdapter())->collect();
 
-        // Mock empty results for other metric types
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_gauge:*:meta'])
-            ->andReturn([]);
-
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_histogram:*:meta'])
-            ->andReturn([]);
-
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_summary:*:meta'])
-            ->andReturn([]);
-
-        // Mock getting the metadata (expects 2 labels)
-        $connection->shouldReceive('command')
-            ->with('hGetAll', ['PROMETHEUS_counter:test_metric:meta'])
-            ->andReturn([
-                'name' => 'test_metric',
-                'help' => 'Test metric',
-                'labelNames' => json_encode(['method', 'status']),
-            ]);
-
-        // Mock finding sample keys
-        $connection->shouldReceive('command')
-            ->with('keys', ['PROMETHEUS_counter:test_metric:*'])
-            ->andReturn(['PROMETHEUS_counter:test_metric:abc123']);
-
-        // Mock getting sample data (correct number of label values)
-        $connection->shouldReceive('command')
-            ->with('hGetAll', ['PROMETHEUS_counter:test_metric:abc123'])
-            ->andReturn([
-                'value' => '5',
-                'labelValues' => json_encode(['GET', '200']), // Correct: 2 values for 2 labels
-            ]);
-
-        Redis::shouldReceive('connection')
-            ->andReturn($connection);
-
-        $adapter = new LaravelRedisAdapter();
-        $metrics = $adapter->collect();
-
-        // The valid sample should appear in results
         $this->assertCount(1, $metrics);
-        $this->assertEquals('test_metric', $metrics[0]->getName());
+        $this->assertSame('test_metric', $metrics[0]->getName());
+        $this->assertSame(
+            "# HELP test_metric Test metric\n"
+            . "# TYPE test_metric counter\n"
+            . "test_metric{label1=\"a\",label2=\"x\"} 5\n"
+            . "test_metric{label1=\"b\",label2=\"y\"} 2\n",
+            (new RenderTextFormat())->render($metrics)
+        );
+    }
+
+    public function test_collect_throws_when_the_redis_script_fails(): void
+    {
+        $connection = Mockery::mock(Connection::class);
+        $connection->shouldReceive('eval')->once()->andReturn(false);
+        Redis::shouldReceive('connection')->andReturn($connection);
+
+        $this->expectException(RuntimeException::class);
+
+        (new LaravelRedisAdapter())->collect();
     }
 }

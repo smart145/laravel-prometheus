@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Smart145\Prometheus;
 
 use Prometheus\CollectorRegistry;
-use Prometheus\Counter;
 use Prometheus\Gauge;
 use Prometheus\Histogram;
 use Prometheus\Storage\Adapter;
@@ -14,6 +13,8 @@ use Smart145\Prometheus\Adapters\LaravelRedisAdapter;
 use Smart145\Prometheus\MetricBuilders\CounterBuilder;
 use Smart145\Prometheus\MetricBuilders\GaugeBuilder;
 use Smart145\Prometheus\MetricBuilders\HistogramBuilder;
+use Throwable;
+use UnexpectedValueException;
 
 /**
  * Core Prometheus service for Laravel.
@@ -32,6 +33,13 @@ class PrometheusService
     private Adapter $adapter;
 
     private array $gaugeCallbacks = [];
+
+    /**
+     * Buckets of each histogram, as first declared in this process.
+     *
+     * @var array<string, array<int, int|float>>
+     */
+    private array $histogramBuckets = [];
 
     /**
      * In-memory fallback for the last scrape timestamp.
@@ -146,7 +154,11 @@ class PrometheusService
             $resolvedBuckets
         );
 
-        return new HistogramBuilder($histogram, $this->adapter, $resolvedBuckets);
+        // promphp keeps the first declaration of a histogram. Use the same
+        // buckets for recordings with a timestamp, which go to the adapter.
+        $this->histogramBuckets[$histogram->getName()] ??= $resolvedBuckets;
+
+        return new HistogramBuilder($histogram, $this->adapter, $this->histogramBuckets[$histogram->getName()]);
     }
 
     /**
@@ -180,34 +192,122 @@ class PrometheusService
      */
     public function render(): string
     {
-        // Evaluate all gauge callbacks before rendering
+        return $this->renderSamples(false);
+    }
+
+    /**
+     * Render all metrics, then wipe them from storage.
+     *
+     * With Redis storage the read and the wipe are one step, so a recording
+     * that arrives during the scrape is not lost.
+     */
+    public function renderAndWipe(): string
+    {
+        return $this->renderSamples(true);
+    }
+
+    private function renderSamples(bool $wipe): string
+    {
+        // Use our adapter's collect method which returns our MetricFamilySamples with timestamp support
+        if ($this->adapter instanceof LaravelRedisAdapter) {
+            $samples = $wipe ? $this->adapter->collectAndWipe() : $this->adapter->collect();
+        } else {
+            // For InMemory adapter, convert promphp samples to our format
+            $samples = $this->convertSamples($this->registry->getMetricFamilySamples());
+
+            if ($wipe) {
+                $this->adapter->wipeStorage();
+            }
+        }
+
+        $samples = $this->addGaugeCallbackSamples($samples);
+
+        // Silent: one bad sample becomes a comment and the scrape continues.
+        return (new RenderTextFormat())->render($samples, true);
+    }
+
+    /**
+     * Evaluate the gauge callbacks and add their values to the collected samples.
+     *
+     * A callback value is not stored. A callback that fails has no sample in
+     * this scrape, so Prometheus sees a missing value and not an old one.
+     *
+     * @param  MetricFamilySamples[]  $families
+     * @return MetricFamilySamples[]
+     */
+    private function addGaugeCallbackSamples(array $families): array
+    {
+        $byName = [];
+        foreach ($families as $family) {
+            $byName[$family->getName()] = $family;
+        }
+
         foreach ($this->gaugeCallbacks as $gaugeConfig) {
+            $name = $gaugeConfig['namespace'] . '_' . $gaugeConfig['name'];
+            $labelNames = array_values($gaugeConfig['labelNames']);
+            $labelValues = array_map('strval', array_values($gaugeConfig['labelValues']));
+            $family = $byName[$name] ?? null;
+
+            // An earlier version stored callback values. Drop that sample
+            // first, so a failing callback does not leave it in the output.
+            $family?->removeSample($name, $labelNames, $labelValues);
+
             try {
                 $value = call_user_func($gaugeConfig['callback']);
-                $gauge = $this->registry->getOrRegisterGauge(
-                    $gaugeConfig['namespace'],
-                    $gaugeConfig['name'],
-                    $gaugeConfig['help'],
-                    $gaugeConfig['labelNames']
-                );
-                $gauge->set($value, $gaugeConfig['labelValues']);
-            } catch (\Throwable $e) {
-                // Log the error but continue rendering other metrics
+
+                if (is_string($value) && is_numeric($value)) {
+                    $value = (float) $value;
+                }
+
+                if (! is_int($value) && ! is_float($value)) {
+                    throw new UnexpectedValueException(sprintf(
+                        'Gauge callback "%s" must return a number, got %s',
+                        $name,
+                        get_debug_type($value)
+                    ));
+                }
+
+                if (count($labelNames) !== count($labelValues)) {
+                    throw new UnexpectedValueException(sprintf(
+                        'Gauge callback "%s" has %d label names but %d label values',
+                        $name,
+                        count($labelNames),
+                        count($labelValues)
+                    ));
+                }
+
+                if ($family !== null && $family->getType() !== Gauge::TYPE) {
+                    throw new UnexpectedValueException(sprintf(
+                        'Gauge callback "%s" has the name of a stored %s',
+                        $name,
+                        $family->getType()
+                    ));
+                }
+
+                $family = $byName[$name] ??= new MetricFamilySamples([
+                    'name' => $name,
+                    'type' => Gauge::TYPE,
+                    'help' => $gaugeConfig['help'],
+                    'labelNames' => [],
+                ]);
+
+                // The family may already hold these label names (InMemory storage).
+                $family->addSample(new Sample([
+                    'name' => $name,
+                    'labelNames' => $family->getLabelNames() === $labelNames ? [] : $labelNames,
+                    'labelValues' => $labelValues,
+                    'value' => $value,
+                ]));
+            } catch (Throwable $e) {
+                // Report the error but continue rendering other metrics
                 report($e);
             }
         }
 
-        $renderer = new RenderTextFormat();
-
-        // Use our adapter's collect method which returns our MetricFamilySamples with timestamp support
-        if ($this->adapter instanceof Adapters\LaravelRedisAdapter) {
-            $samples = $this->adapter->collect();
-        } else {
-            // For InMemory adapter, convert promphp samples to our format
-            $samples = $this->convertSamples($this->registry->getMetricFamilySamples());
-        }
-
-        return $renderer->render($samples);
+        return array_values(array_filter(
+            $byName,
+            fn (MetricFamilySamples $family): bool => $family->getSamples() !== []
+        ));
     }
 
     /**

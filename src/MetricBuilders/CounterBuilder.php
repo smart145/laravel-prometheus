@@ -51,9 +51,12 @@ class CounterBuilder
      */
     public function incBy(int|float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->counter->getName(), $this->counter->getLabelNames(), $labelValues)) {
+        if (! $this->validateLabels($this->counter->getName(), $this->counter->getLabelNames(), $labelValues)
+            || ! $this->validateIncrement($this->counter->getName(), $value, false)) {
             return;
         }
+
+        $labelValues = $this->normalizeLabelValues($labelValues);
 
         if ($this->timestamp !== null) {
             // Use adapter directly for timestamp support

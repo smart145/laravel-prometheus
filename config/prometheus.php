@@ -60,7 +60,8 @@ return [
     |
     | Supported: "redis", "memory"
     |
-    | - redis: Persists metrics in Redis (recommended for production)
+    | - redis: Persists metrics in Redis (recommended for production).
+    |          Needs Redis scripting (EVAL). Redis Cluster is not supported.
     | - memory: Stores metrics in memory (lost between requests, for testing)
     |
     */
@@ -97,6 +98,9 @@ return [
     | When enabled, metrics will be automatically wiped after each scrape.
     | This is useful for push-gateway style setups where you want to clear
     | metrics after Prometheus reads them.
+    |
+    | A wiped counter holds only the events since the last scrape. Query it
+    | with sum_over_time(), not rate() or increase(), and use one scraper.
     |
     | Note: This takes precedence over wipe_param settings.
     |
@@ -137,6 +141,10 @@ return [
     | Controls how the package handles label count mismatches when recording
     | metrics. A mismatch occurs when the number of label values provided
     | doesn't match the number of label names defined for the metric.
+    |
+    | The same behavior applies to every recording that cannot be stored:
+    | a negative or non-finite counter increment, a non-finite histogram
+    | observation, and a name that is already stored as another metric type.
     |
     | Supported: "throw", "log", "ignore"
     |

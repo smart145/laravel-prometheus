@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Smart145\Prometheus;
 
-use function is_infinite;
+use Smart145\Prometheus\Support\Number;
 
 /**
  * Extended Sample class that supports timestamps.
@@ -63,11 +63,7 @@ class Sample
 
     public function getValue(): string
     {
-        if (is_float($this->value) && is_infinite($this->value)) {
-            return $this->value > 0 ? '+Inf' : '-Inf';
-        }
-
-        return (string) $this->value;
+        return Number::format($this->value);
     }
 
     public function hasLabelNames(): bool
