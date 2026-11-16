@@ -42,12 +42,11 @@ class HistogramBuilder
      */
     public function observe(float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->histogram->getName(), $this->histogram->getLabelNames(), $labelValues)
-            || ! $this->validateIncrement($this->histogram->getName(), $value, true)) {
+        $labelValues = $this->resolveLabelValues($this->histogram->getName(), $this->histogram->getLabelNames(), $labelValues);
+
+        if ($labelValues === null || ! $this->validateIncrement($this->histogram->getName(), $value, true)) {
             return;
         }
-
-        $labelValues = $this->normalizeLabelValues($labelValues);
 
         if ($this->timestamp !== null) {
             // Use adapter directly for timestamp support

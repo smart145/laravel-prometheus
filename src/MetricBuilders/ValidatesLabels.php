@@ -22,58 +22,54 @@ trait ValidatesLabels
     use RejectsInvalidRecordings;
 
     /**
-     * Validate that the number of label values matches the defined label names.
+     * Turn the label values into text and validate them against the label names.
      *
-     * @param  string  $metricName  The metric name for error messages
-     * @param  array  $labelNames  The defined label names
-     * @param  array  $labelValues  The provided label values
-     * @return bool  Returns true if valid, false if invalid (when not throwing)
-     *
-     * @throws InvalidArgumentException If behavior is 'throw' and labels don't match
-     */
-    private function validateLabels(string $metricName, array $labelNames, array $labelValues): bool
-    {
-        $expectedCount = count($labelNames);
-        $actualCount = count($labelValues);
-
-        foreach ($labelValues as $value) {
-            if ($this->labelValueToString($value) === null) {
-                return $this->rejectRecording(sprintf(
-                    'Metric "%s" has a label value of type %s that cannot be written as text',
-                    $metricName,
-                    get_debug_type($value)
-                ));
-            }
-        }
-
-        if ($expectedCount === $actualCount) {
-            return true;
-        }
-
-        return $this->rejectRecording(sprintf(
-            'Label count mismatch for metric "%s": expected %d labels (%s) but got %d values (%s)',
-            $metricName,
-            $expectedCount,
-            implode(', ', $labelNames),
-            $actualCount,
-            implode(', ', $this->normalizeLabelValues($labelValues))
-        ));
-    }
-
-    /**
-     * Turn label values into a list of strings.
+     * Each value is converted one time. The same text is validated and stored.
      *
      * Prometheus label values are text. Without this, `[200]`, `['200']` and
      * `['status' => '200']` would be stored as three series with the same labels.
      *
-     * @return string[]
+     * @param  string  $metricName  The metric name for error messages
+     * @param  array  $labelNames  The defined label names
+     * @param  array  $labelValues  The provided label values
+     * @return string[]|null  The label values as text, or null if the recording is rejected
+     *
+     * @throws InvalidArgumentException If behavior is 'throw' and the labels are not valid
      */
-    private function normalizeLabelValues(array $labelValues): array
+    private function resolveLabelValues(string $metricName, array $labelNames, array $labelValues): ?array
     {
-        return array_map(
-            fn (mixed $value): string => $this->labelValueToString($value) ?? '',
-            array_values($labelValues)
-        );
+        $resolved = [];
+
+        foreach (array_values($labelValues) as $value) {
+            $text = $this->labelValueToString($value);
+
+            if ($text === null) {
+                $this->rejectRecording(sprintf(
+                    'Metric "%s" has a label value of type %s that cannot be written as text',
+                    $metricName,
+                    get_debug_type($value)
+                ));
+
+                return null;
+            }
+
+            $resolved[] = $text;
+        }
+
+        if (count($labelNames) !== count($resolved)) {
+            $this->rejectRecording(sprintf(
+                'Label count mismatch for metric "%s": expected %d labels (%s) but got %d values (%s)',
+                $metricName,
+                count($labelNames),
+                implode(', ', $labelNames),
+                count($resolved),
+                implode(', ', $resolved)
+            ));
+
+            return null;
+        }
+
+        return $resolved;
     }
 
     /**

@@ -305,7 +305,8 @@ LUA;
      * Version 1.0 built the sample key from the raw label values, so `[200]`
      * and `['200']` are two keys. Both render as `status="200"`, and a scrape
      * must not contain one series twice. Counters and histograms are added.
-     * For a gauge, the sample that was written last wins.
+     * For a gauge, the sample that was written last wins. The timestamp is
+     * that of the sample that was written last.
      *
      * @param  array<int, array{0: string, 1: array<int, string>}>  $rawSamples
      * @return array<int, array{0: string, 1: array<string, string>}>
@@ -347,9 +348,19 @@ LUA;
                     $kept[$field] = Number::format(Number::parse($kept[$field] ?? 0) + Number::parse($fieldValue));
                 } elseif (str_starts_with($field, 'bucket_')) {
                     $kept[$field] = (string) ((int) ($kept[$field] ?? 0) + (int) $fieldValue);
-                } elseif ($field === 'timestamp') {
-                    $kept[$field] = (string) max((int) ($kept[$field] ?? 0), (int) $fieldValue);
                 }
+            }
+
+            // The timestamp is that of the last recording. A recording without
+            // a timestamp removes it, also when the older sample has one.
+            if ((int) ($sample['updated'] ?? 0) >= (int) ($kept['updated'] ?? 0)) {
+                unset($kept['timestamp']);
+
+                if (isset($sample['timestamp'])) {
+                    $kept['timestamp'] = $sample['timestamp'];
+                }
+
+                $kept['updated'] = $sample['updated'] ?? '0';
             }
 
             $merged[$series][1] = $kept;

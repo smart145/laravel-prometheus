@@ -14,6 +14,7 @@ use Smart145\Prometheus\Adapters\LaravelRedisAdapter;
 use Smart145\Prometheus\MetricBuilders\CounterBuilder;
 use Smart145\Prometheus\MetricBuilders\GaugeBuilder;
 use Smart145\Prometheus\MetricBuilders\HistogramBuilder;
+use Smart145\Prometheus\Support\Number;
 use Throwable;
 use UnexpectedValueException;
 
@@ -267,7 +268,11 @@ class PrometheusService
                     ));
                 }
 
-                $labelValues = array_map(fn (mixed $value): string => (string) $value, $labelValues);
+                // The same text that a builder stores for this value.
+                $labelValues = array_map(
+                    fn (mixed $value): string => is_float($value) ? Number::format($value) : (string) $value,
+                    $labelValues
+                );
                 $family = $byName[$name] ?? null;
 
                 // Check the type first: a callback must not change a stored counter or histogram.

@@ -127,6 +127,38 @@ class RecordingValidationTest extends TestCase
         }
     }
 
+    public function test_label_value_is_converted_to_text_one_time(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'ignore']);
+
+        // The first conversion gives text, a second conversion would fail.
+        $label = new class implements \JsonSerializable
+        {
+            private int $calls = 0;
+
+            public function jsonSerialize(): mixed
+            {
+                return ++$this->calls === 1 ? 'first' : INF;
+            }
+        };
+
+        $prometheus = $this->freshPrometheus();
+        $prometheus->counter('items_total', 'Items', ['kind'])->inc([$label]);
+
+        $this->assertStringContainsString('test_items_total{kind="\"first\""} 1', $prometheus->render());
+    }
+
+    public function test_whole_float_and_integer_label_values_share_one_series(): void
+    {
+        $prometheus = $this->freshPrometheus();
+        $counter = $prometheus->counter('big_total', 'Big', ['id']);
+
+        $counter->inc([1000000000000000000]);
+        $counter->inc([1.0E+18]);
+
+        $this->assertStringContainsString('test_big_total{id="1000000000000000000"} 2', $prometheus->render());
+    }
+
     public function test_number_format_keeps_precision(): void
     {
         $this->assertSame('5', Number::format(5));
@@ -138,6 +170,7 @@ class RecordingValidationTest extends TestCase
         $this->assertSame('NaN', Number::format(NAN));
         $this->assertSame('+Inf', Number::format(INF));
         $this->assertSame('-Inf', Number::format(-INF));
+        $this->assertSame('1000000000000000000', Number::format(1.0E+18));
         $this->assertSame(1.0E+25, (float) Number::format(1.0E+25));
     }
 

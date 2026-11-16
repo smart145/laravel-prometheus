@@ -347,6 +347,22 @@ abstract class RedisStorageTestCase extends TestCase
         $this->assertStringContainsString('test_http_total{status="200"} 8', $output);
     }
 
+    public function test_merged_sample_has_no_timestamp_when_the_last_recording_has_none(): void
+    {
+        // Version 1.0 sample with a timestamp and an integer label value.
+        $redis = $this->redis();
+        $redis->command('hMSet', ['PROMETHEUS_counter:test_http_total:meta', [
+            'name' => 'test_http_total', 'help' => 'HTTP', 'labelNames' => json_encode(['status']),
+        ]]);
+        $redis->command('hMSet', ['PROMETHEUS_counter:test_http_total:' . md5(json_encode([200])), [
+            'value' => '7', 'labelValues' => json_encode([200]), 'timestamp' => '1700000000000',
+        ]]);
+
+        $this->process()->counter('http_total', 'HTTP', ['status'])->inc(['200']);
+
+        $this->assertStringContainsString("test_http_total{status=\"200\"} 8\n", $this->process()->render());
+    }
+
     public function test_corrupted_sample_cleanup_keeps_a_sample_that_a_writer_repaired(): void
     {
         config(['prometheus.auto_clean_corrupted_samples' => true]);

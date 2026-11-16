@@ -29,7 +29,9 @@ final class Number
             return $value > 0 ? '+Inf' : '-Inf';
         }
 
-        if (floor($value) === $value && abs($value) < 1e15 && abs($value) < PHP_INT_MAX) {
+        // A whole number in the native integer range is written as an integer,
+        // so the float 200.0 and the integer 200 have the same text.
+        if (floor($value) === $value && abs($value) < PHP_INT_MAX) {
             return (string) (int) $value;
         }
 
