@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use Smart145\Prometheus\RejectsInvalidRecordings;
 use Smart145\Prometheus\Support\Number;
 use Stringable;
+use Throwable;
 
 /**
  * Trait for validating what a builder records: label values and increments.
@@ -81,13 +82,18 @@ trait ValidatesLabels
             return Number::format($value);
         }
 
-        if ($value === null || is_scalar($value) || $value instanceof Stringable) {
-            return (string) $value;
+        try {
+            if ($value === null || is_scalar($value) || $value instanceof Stringable) {
+                return (string) $value;
+            }
+
+            $json = json_encode($value);
+
+            return $json === false ? null : $json;
+        } catch (Throwable) {
+            // A __toString() or jsonSerialize() that throws: the value has no text form.
+            return null;
         }
-
-        $json = json_encode($value);
-
-        return $json === false ? null : $json;
     }
 
     /**

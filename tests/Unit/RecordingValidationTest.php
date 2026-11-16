@@ -148,6 +148,32 @@ class RecordingValidationTest extends TestCase
         $this->assertStringContainsString('test_items_total{kind="\"first\""} 1', $prometheus->render());
     }
 
+    public function test_label_value_whose_conversion_throws_is_rejected(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'log']);
+        Log::spy();
+
+        $label = new class implements \JsonSerializable
+        {
+            public function jsonSerialize(): mixed
+            {
+                throw new \RuntimeException('cannot serialize');
+            }
+        };
+
+        $prometheus = $this->freshPrometheus();
+        $counter = $prometheus->counter('items_total', 'Items', ['kind']);
+        $counter->inc(['a']);
+        $counter->inc([$label]);
+
+        $output = $prometheus->render();
+
+        // The application continues, and the recording is not stored.
+        $this->assertSame(1, substr_count($output, 'test_items_total{'));
+        $this->assertStringContainsString('test_items_total{kind="a"} 1', $output);
+        Log::shouldHaveReceived('warning')->once();
+    }
+
     public function test_whole_float_and_integer_label_values_share_one_series(): void
     {
         $prometheus = $this->freshPrometheus();
