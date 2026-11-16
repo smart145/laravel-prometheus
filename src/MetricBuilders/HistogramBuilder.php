@@ -42,7 +42,9 @@ class HistogramBuilder
      */
     public function observe(float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->histogram->getName(), $this->histogram->getLabelNames(), $labelValues)) {
+        $labelValues = $this->resolveLabelValues($this->histogram->getName(), $this->histogram->getLabelNames(), $labelValues);
+
+        if ($labelValues === null || ! $this->validateIncrement($this->histogram->getName(), $value, true)) {
             return;
         }
 

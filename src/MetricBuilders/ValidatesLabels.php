@@ -4,57 +4,122 @@ declare(strict_types=1);
 
 namespace Smart145\Prometheus\MetricBuilders;
 
-use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Smart145\Prometheus\RejectsInvalidRecordings;
+use Smart145\Prometheus\Support\Number;
+use Stringable;
+use Throwable;
 
 /**
- * Trait for validating metric label counts.
+ * Trait for validating what a builder records: label values and increments.
  *
- * Provides configurable behavior for handling label mismatches:
+ * An invalid recording follows `prometheus.label_mismatch_behavior`:
  * - throw: Throw an exception (default, best for development)
  * - log: Log a warning and skip (best for production resilience)
  * - ignore: Silently skip (use with caution)
  */
 trait ValidatesLabels
 {
+    use RejectsInvalidRecordings;
+
     /**
-     * Validate that the number of label values matches the defined label names.
+     * Turn the label values into text and validate them against the label names.
+     *
+     * Each value is converted one time. The same text is validated and stored.
+     *
+     * Prometheus label values are text. Without this, `[200]`, `['200']` and
+     * `['status' => '200']` would be stored as three series with the same labels.
      *
      * @param  string  $metricName  The metric name for error messages
      * @param  array  $labelNames  The defined label names
      * @param  array  $labelValues  The provided label values
+     * @return string[]|null  The label values as text, or null if the recording is rejected
+     *
+     * @throws InvalidArgumentException If behavior is 'throw' and the labels are not valid
+     */
+    private function resolveLabelValues(string $metricName, array $labelNames, array $labelValues): ?array
+    {
+        $resolved = [];
+
+        foreach (array_values($labelValues) as $value) {
+            $text = $this->labelValueToString($value);
+
+            if ($text === null) {
+                $this->rejectRecording(sprintf(
+                    'Metric "%s" has a label value of type %s that cannot be written as text',
+                    $metricName,
+                    get_debug_type($value)
+                ));
+
+                return null;
+            }
+
+            $resolved[] = $text;
+        }
+
+        if (count($labelNames) !== count($resolved)) {
+            $this->rejectRecording(sprintf(
+                'Label count mismatch for metric "%s": expected %d labels (%s) but got %d values (%s)',
+                $metricName,
+                count($labelNames),
+                implode(', ', $labelNames),
+                count($resolved),
+                implode(', ', $resolved)
+            ));
+
+            return null;
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @return string|null  Null if the value has no text form
+     */
+    private function labelValueToString(mixed $value): ?string
+    {
+        if (is_float($value)) {
+            return Number::format($value);
+        }
+
+        try {
+            if ($value === null || is_scalar($value) || $value instanceof Stringable) {
+                return (string) $value;
+            }
+
+            $json = json_encode($value);
+
+            return $json === false ? null : $json;
+        } catch (Throwable) {
+            // A __toString() or jsonSerialize() that throws: the value has no text form.
+            return null;
+        }
+    }
+
+    /**
+     * Validate a value that is added to a stored value.
+     *
+     * NaN and infinite increments cannot be added. A counter must not decrease:
+     * Prometheus reads a lower value as a counter reset.
+     *
      * @return bool  Returns true if valid, false if invalid (when not throwing)
      *
-     * @throws InvalidArgumentException If behavior is 'throw' and labels don't match
+     * @throws InvalidArgumentException If behavior is 'throw' and the value is invalid
      */
-    private function validateLabels(string $metricName, array $labelNames, array $labelValues): bool
+    private function validateIncrement(string $metricName, int|float $value, bool $allowNegative): bool
     {
-        $expectedCount = count($labelNames);
-        $actualCount = count($labelValues);
-
-        if ($expectedCount === $actualCount) {
-            return true;
+        if (is_float($value) && ! is_finite($value)) {
+            return $this->rejectRecording(sprintf('Metric "%s" cannot record a NaN or infinite value', $metricName));
         }
 
-        $behavior = config('prometheus.label_mismatch_behavior', 'throw');
-        $message = sprintf(
-            'Label count mismatch for metric "%s": expected %d labels (%s) but got %d values (%s)',
-            $metricName,
-            $expectedCount,
-            implode(', ', $labelNames),
-            $actualCount,
-            implode(', ', array_map('strval', $labelValues))
-        );
-
-        if ($behavior === 'throw') {
-            throw new InvalidArgumentException($message);
+        if (! $allowNegative && $value < 0) {
+            return $this->rejectRecording(sprintf(
+                'Counter "%s" cannot be incremented by a negative value (%s)',
+                $metricName,
+                $value
+            ));
         }
 
-        if ($behavior === 'log') {
-            Log::warning('Prometheus: ' . $message);
-        }
-
-        // For 'log' and 'ignore', return false to indicate the metric should be skipped
-        return false;
+        return true;
     }
 }

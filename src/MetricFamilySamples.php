@@ -61,6 +61,42 @@ class MetricFamilySamples
         return $this->samples;
     }
 
+    public function addSample(Sample $sample): void
+    {
+        $this->samples[] = $sample;
+    }
+
+    /**
+     * Remove the sample of one series, if the family has it.
+     *
+     * A series is its name and its label pairs. The order of the labels is
+     * not part of it.
+     *
+     * @param  string[]  $labelNames  All label names of the series
+     * @param  string[]  $labelValues
+     */
+    public function removeSample(string $name, array $labelNames, array $labelValues): void
+    {
+        $pairs = function (array $names, array $values): ?array {
+            if (count($names) !== count($values)) {
+                return null;
+            }
+
+            $pairs = array_combine($names, array_map('strval', $values));
+            ksort($pairs);
+
+            return $pairs;
+        };
+
+        $target = $pairs($labelNames, $labelValues);
+
+        $this->samples = array_values(array_filter(
+            $this->samples,
+            fn (Sample $sample): bool => $sample->getName() !== $name
+                || $pairs(array_merge($this->labelNames, $sample->getLabelNames()), $sample->getLabelValues()) !== $target
+        ));
+    }
+
     /**
      * @return string[]
      */

@@ -43,7 +43,9 @@ class GaugeBuilder
      */
     public function set(float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues)) {
+        $labelValues = $this->resolveLabelValues($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues);
+
+        if ($labelValues === null) {
             return;
         }
 
@@ -82,7 +84,9 @@ class GaugeBuilder
      */
     public function incBy(int|float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues)) {
+        $labelValues = $this->resolveLabelValues($this->gauge->getName(), $this->gauge->getLabelNames(), $labelValues);
+
+        if ($labelValues === null || ! $this->validateIncrement($this->gauge->getName(), $value, true)) {
             return;
         }
 

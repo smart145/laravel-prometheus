@@ -150,5 +150,14 @@ class WipeParameterTest extends TestCase
         $response = $this->get('/prometheus');
         $response->assertSee('test_disabled_wipe_counter');
     }
-}
 
+    public function test_wiping_scrape_returns_the_metrics_once(): void
+    {
+        config(['prometheus.wipe_param.enabled' => true, 'prometheus.wipe_param.param' => 'wipe', 'prometheus.wipe_param.value' => '1']);
+
+        Prometheus::counter('once_total', 'Once')->incBy(4);
+
+        $this->get('/prometheus?wipe=1')->assertOk()->assertSee('test_once_total 4');
+        $this->get('/prometheus?wipe=1')->assertOk()->assertDontSee('test_once_total');
+    }
+}

@@ -60,7 +60,8 @@ return [
     |
     | Supported: "redis", "memory"
     |
-    | - redis: Persists metrics in Redis (recommended for production)
+    | - redis: Persists metrics in Redis (recommended for production).
+    |          Needs Redis scripting (EVAL). Redis Cluster is not supported.
     | - memory: Stores metrics in memory (lost between requests, for testing)
     |
     */
@@ -98,6 +99,9 @@ return [
     | This is useful for push-gateway style setups where you want to clear
     | metrics after Prometheus reads them.
     |
+    | A wiped counter holds only the events since the last scrape. Query it
+    | with sum_over_time(), not rate() or increase(), and use one scraper.
+    |
     | Note: This takes precedence over wipe_param settings.
     |
     */
@@ -131,12 +135,54 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Wipe Gauges
+    |--------------------------------------------------------------------------
+    |
+    | Controls whether a scrape that wipes (auto_wipe or the wipe parameter)
+    | also wipes the gauges. Redis storage only.
+    |
+    | - true: The scrape wipes all metrics (default).
+    | - false: The scrape wipes counters and histograms and keeps the gauges.
+    |          A gauge is a current value, so inc()/dec() and set() stay
+    |          correct across scrapes.
+    |
+    | A full wipe (`php artisan prometheus:cleanup --force`, the idle cleanup
+    | and `Prometheus::wipe()`) always removes the gauges too.
+    |
+    */
+    'wipe_gauges' => env('PROMETHEUS_WIPE_GAUGES', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Gauge TTL
+    |--------------------------------------------------------------------------
+    |
+    | Seconds after which a gauge sample that nobody wrote is removed during
+    | a scrape. Redis storage only. 0 keeps gauge samples until a wipe.
+    |
+    | Use it with wipe_gauges = false, so that a gauge series that the
+    | application no longer writes (an old host, queue or tenant) does not
+    | stay in Redis and in the output forever. Set it longer than the longest
+    | time between two writes of a gauge that is still in use.
+    |
+    | Samples written by a version without this option have no write time.
+    | They are kept until their next write.
+    |
+    */
+    'gauge_ttl' => (int) env('PROMETHEUS_GAUGE_TTL', 0),
+
+    /*
+    |--------------------------------------------------------------------------
     | Label Mismatch Behavior
     |--------------------------------------------------------------------------
     |
     | Controls how the package handles label count mismatches when recording
     | metrics. A mismatch occurs when the number of label values provided
     | doesn't match the number of label names defined for the metric.
+    |
+    | The same behavior applies to every recording that cannot be stored:
+    | a negative or non-finite counter increment, a non-finite histogram
+    | observation, and a name that is already stored as another metric type.
     |
     | Supported: "throw", "log", "ignore"
     |

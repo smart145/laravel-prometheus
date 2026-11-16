@@ -191,5 +191,76 @@ class GaugeTest extends TestCase
         $output = $prometheus->render();
         $this->assertStringNotContainsString('queue_size', $output);
     }
-}
 
+    public function test_failing_gauge_callback_has_no_sample_and_other_metrics_render(): void
+    {
+        $prometheus = $this->freshPrometheus();
+        $calls = 0;
+
+        $prometheus->registerGaugeCallback('users', 'Users', function () use (&$calls) {
+            if (++$calls > 1) {
+                throw new \RuntimeException('database is down');
+            }
+
+            return 42;
+        });
+        $prometheus->registerGaugeCallback('jobs', 'Jobs', fn () => 3, ['queue'], ['default']);
+
+        $this->assertStringContainsString("test_users 42\n", $prometheus->render());
+
+        $second = $prometheus->render();
+
+        $this->assertStringNotContainsString('test_users', $second);
+        $this->assertStringContainsString('test_jobs{queue="default"} 3', $second);
+    }
+
+    public function test_gauge_callback_that_returns_no_number_is_skipped(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $prometheus->registerGaugeCallback('nothing', 'Nothing', fn () => null);
+        $prometheus->registerGaugeCallback('text', 'Text', fn () => '17');
+
+        $output = $prometheus->render();
+
+        $this->assertStringNotContainsString('test_nothing', $output);
+        $this->assertStringContainsString("test_text 17\n", $output);
+    }
+
+    public function test_gauge_callback_with_invalid_names_or_label_values_is_skipped(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $prometheus->registerGaugeCallback('bad-name', 'Bad', fn () => 1);
+        $prometheus->registerGaugeCallback('bad_label', 'Bad', fn () => 1, ['tenant-id'], ['a']);
+        $prometheus->registerGaugeCallback('bad_value', 'Bad', fn () => 1, ['tenant'], [new \stdClass()]);
+        $prometheus->registerGaugeCallback('good', 'Good', fn () => 2, ['tenant'], ['acme']);
+
+        $output = $prometheus->render();
+
+        $this->assertStringNotContainsString('bad', $output);
+        $this->assertStringContainsString('test_good{tenant="acme"} 2', $output);
+    }
+
+    public function test_gauge_callback_with_an_empty_namespace_has_no_leading_underscore(): void
+    {
+        config(['prometheus.namespace' => '']);
+
+        $prometheus = $this->freshPrometheus();
+        $prometheus->registerGaugeCallback('users', 'Users', fn () => 7);
+
+        $this->assertStringContainsString("# TYPE users gauge\nusers 7\n", $prometheus->render());
+    }
+
+    public function test_gauge_callback_with_other_label_names_than_a_stored_gauge_is_rendered(): void
+    {
+        $prometheus = $this->freshPrometheus();
+        $prometheus->gauge('workers', 'Workers', ['host'])->set(1, ['a']);
+        $prometheus->registerGaugeCallback('workers', 'Workers', fn () => 3, ['queue'], ['default']);
+
+        $output = $prometheus->render();
+
+        $this->assertStringContainsString('test_workers{host="a"} 1', $output);
+        $this->assertStringContainsString('test_workers{queue="default"} 3', $output);
+    }
+}

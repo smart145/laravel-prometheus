@@ -30,11 +30,25 @@ Use these words in code, tests, commit messages and PRs.
 - **Scrape**: a `GET` on the metrics route (`prometheus.route`, default
   `/prometheus`). It renders, maybe wipes, then records the scrape time.
 - **Wipe**: clear all stored samples. Triggered by `auto_wipe` or by the
-  wipe query parameter (`wipe_param`).
+  wipe query parameter (`wipe_param`). A scrape that wipes uses
+  `renderAndWipe()`: with Redis, the read and the wipe are one step, and
+  `wipe_gauges = false` keeps the gauges. A full wipe (`wipe()`, idle
+  cleanup) removes all metrics.
+- **Gauge TTL**: `prometheus.gauge_ttl`. A scrape removes a Redis gauge
+  sample that was not written for that many seconds.
+- **Index**: the Redis keys that list the stored metrics and samples
+  (`PROMETHEUS_index`, `PROMETHEUS_<type>:<name>:index`). The adapter reads
+  through the index. Only the first scrape (no `PROMETHEUS_schema` key)
+  runs `KEYS`, once, to add existing samples to the index.
 - **Gauge callback**: a gauge evaluated at render time
-  (`registerGaugeCallback`). A failing callback is reported, not thrown.
+  (`registerGaugeCallback`). Its value is not stored. A failing callback is
+  reported, not thrown, and has no sample in that scrape.
+- **Rejected recording**: a recording that cannot be stored (label count
+  mismatch, negative counter increment, non-finite value, name stored as
+  another type). It follows `prometheus.label_mismatch_behavior`.
 - **Corrupted sample**: a Redis sample whose label value count does not match
-  its metric's label names. Cleaned by `auto_clean_corrupted_samples`.
+  its label names (its own, or the metric's for a sample of version 1.0).
+  Cleaned by `auto_clean_corrupted_samples`.
 - **Idle cleanup**: `php artisan prometheus:cleanup` (`CleanupMetricsCommand`)
   wipes metrics that nobody scraped for too long, using the last scrape time.
   Configured under `prometheus.cleanup`.
@@ -52,6 +66,10 @@ Use these words in code, tests, commit messages and PRs.
   (Keep a Changelog format).
 - The metrics endpoint must never fail a scrape because of one bad metric:
   report or log, then keep rendering.
+- A Redis write, and a Redis read of all samples, is one Lua script in
+  `LaravelRedisAdapter`. Do not split one into several commands: a scrape
+  or a wipe between two commands loses or corrupts a recording.
+- Format and parse numbers with `Support\Number`, not `(string)` / `(float)`.
 - Do not add a hard dependency beyond `illuminate/*` and promphp.
 - Do not change existing metric names, label names, Redis key formats
   (`PROMETHEUS_*`) or env var names without calling it out as a breaking
@@ -68,6 +86,10 @@ Use these words in code, tests, commit messages and PRs.
 - Test names are `test_<behaviour_in_snake_case>`.
 - `Unit/` tests the service, builders, renderer and adapter.
   `Feature/` tests the HTTP endpoint, middleware and artisan command.
+- Redis behaviour (races, prefixes, Lua, both clients) is tested against a
+  real server in `tests/RedisStorageTestCase.php`. Run it with
+  `REDIS_PORT=<port> vendor/bin/phpunit --filter StorageTest`. Without a
+  server these tests are skipped: report them as not run.
 
 ## Skills
 

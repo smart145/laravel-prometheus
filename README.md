@@ -56,10 +56,72 @@ PROMETHEUS_AUTO_WIPE=false
 # Wipe via query parameter
 PROMETHEUS_WIPE_PARAM_ENABLED=true
 PROMETHEUS_WIPE_PARAM=wipe
-PROMETHEUS_WIPE_VALUE=true
+PROMETHEUS_WIPE_VALUE=1
+
+# Keep gauges when a scrape wipes (Redis storage): set to false
+PROMETHEUS_WIPE_GAUGES=true
+
+# Remove a gauge sample that was not written for this many seconds (0 = never)
+PROMETHEUS_GAUGE_TTL=0
+
+# What to do with a recording that cannot be stored: throw, log, ignore
+PROMETHEUS_LABEL_MISMATCH_BEHAVIOR=throw
 ```
 
+### Redis Storage
+
+- Every recording is one Redis step (a Lua script). A scrape never reads a
+  half-written sample.
+- A scrape reads all samples in one Redis call through an index. It does not
+  use `KEYS`, with one exception: the first scrape (new installation, upgrade
+  or upgrade from 1.x) scans the
+  database once with `KEYS` to add existing samples to the index.
+- The adapter needs Redis scripting (`EVAL`). It works with the `phpredis`
+  and `predis` clients. It does not support Redis Cluster.
+- All application instances that share a Redis database share one set of
+  metrics. Scrape one instance (for example through the load balancer), not
+  every instance. If Prometheus scrapes N instances, each value is in
+  Prometheus N times.
+
+### Upgrading from 1.x
+
+- Existing Redis keys keep their format. The first scrape after the upgrade
+  adds the samples of version 1.x to the index (one `KEYS` scan).
+- Deploy all application instances before that first scrape if you can. An
+  instance that still runs 1.x after the first scrape writes samples without
+  an index entry. A **new** series from such an instance is not in a scrape
+  and stays in Redis until a full wipe (`php artisan prometheus:cleanup --force`).
+  Run that command once after the last 1.x instance stopped.
+- Samples of version 1.x with a number as label value (`[200]`) are merged
+  with the samples that this version writes (`['200']`) when a scrape renders
+  them.
+- A counter now rejects a negative increment, and one name cannot be two
+  metric types. With `PROMETHEUS_LABEL_MISMATCH_BEHAVIOR=throw` (the default)
+  such a recording throws. Set `log` before the upgrade if you are not sure.
+
 ### Wipe Modes
+
+Select the mode first. It decides which PromQL functions give correct results.
+
+| Mode | A counter shows | Correct PromQL |
+| --- | --- | --- |
+| No wipe (default) | The total since the last reset | `rate()`, `increase()`, `histogram_quantile(..., rate(...))` |
+| Wipe on each scrape | Only the events since the last scrape | `sum_over_time()` |
+
+`rate()` and `increase()` are wrong on wiped counters: Prometheus reads each
+lower value as a counter reset. See [Grafana Queries](#grafana-queries).
+
+In wipe mode:
+
+- Use one scraper only. Each scrape removes the data, so a second Prometheus
+  server or a manual request with the wipe parameter takes data away.
+- By default the wipe removes gauges too. A gauge that uses `inc()` / `dec()`
+  then restarts from zero, and a `set()` gauge is absent until its next
+  write. Set `PROMETHEUS_WIPE_GAUGES=false` to keep the gauges: the scrape
+  then wipes counters and histograms only, and no value is calculated at
+  scrape time.
+- The read and the wipe are one Redis step. A recording that arrives during a
+  scrape is in that scrape or in the next one.
 
 **Auto-wipe after every scrape:**
 ```bash
@@ -69,10 +131,10 @@ Every time Prometheus (or any client) reads the endpoint, metrics are automatica
 
 **Wipe via query parameter (default):**
 ```bash
-# /prometheus?wipe=true (default)
+# /prometheus?wipe=1 (default)
 PROMETHEUS_WIPE_PARAM_ENABLED=true
 PROMETHEUS_WIPE_PARAM=wipe
-PROMETHEUS_WIPE_VALUE=true
+PROMETHEUS_WIPE_VALUE=1
 
 # Custom: /prometheus?clear=yes
 PROMETHEUS_WIPE_PARAM=clear
@@ -82,6 +144,18 @@ PROMETHEUS_WIPE_VALUE=yes
 PROMETHEUS_WIPE_PARAM=reset
 PROMETHEUS_WIPE_VALUE=1
 ```
+
+**Keep gauges, and remove the ones that are no longer written:**
+```bash
+PROMETHEUS_WIPE_GAUGES=false
+# A gauge sample with no write for 1 hour is removed in the next scrape
+PROMETHEUS_GAUGE_TTL=3600
+```
+Gauges are removed in three ways:
+
+- `PROMETHEUS_GAUGE_TTL`: one gauge sample, when nobody wrote it for that time.
+- `php artisan prometheus:cleanup --force` or `Prometheus::wipe()`: all metrics, gauges included.
+- The idle cleanup: all metrics, when nothing scraped for the idle threshold.
 
 **Disable wipe entirely:**
 ```bash
@@ -135,9 +209,37 @@ $counter->inc(['POST', '/api/users', '201']);
 $counter->inc(['GET', '/api/users', '500']);
 ```
 
+Rules for correct values:
+
+- Use the same label names, in the same order, each time you record a metric.
+- Label values are text: `200` and `'200'` are the same series.
+- Keep the number of label values small and fixed (method, status, route
+  name). Do not use a user ID, an email, a record ID or a full URL as a label
+  value: each new value is a new series in Redis and in Prometheus.
+- A counter only goes up. A negative or non-finite increment is rejected.
+- One name has one type. A name that is stored as a counter cannot also be
+  recorded as a gauge or a histogram.
+- For a duration or a size, use a histogram, not a gauge. A gauge keeps only
+  the last value before the scrape.
+- Give a histogram buckets that fit its unit. The default buckets are for
+  seconds (0.005 to 10).
+- Do not change the buckets of a histogram that has stored samples. The old
+  observations stay in the buckets that they were counted in, so `_count` and
+  `_sum` stay correct, but a new, finer bucket does not include them. Wipe
+  the metrics after a bucket change if the percentiles must be exact.
+- Do not rename a label and keep its position. A sample is found by its label
+  values, so the old sample continues under the new label name.
+
+A rejected recording follows `PROMETHEUS_LABEL_MISMATCH_BEHAVIOR`.
+
 ### With Timestamps
 
-Record the exact time an event occurred (not when Prometheus scrapes):
+Record the exact time an event occurred (not when Prometheus scrapes).
+
+Use a timestamp only for a gauge that you set at a known time. Do not use it
+for counters and histograms: Prometheus ignores a sample whose timestamp did
+not change, and `rate()` needs the scrape time. A recording without a
+timestamp removes the timestamp of the sample.
 
 ```php
 // Add timestamp to the metric
@@ -162,7 +264,9 @@ app_events_total{type="user_signup"} 1 1703184523000
 
 ### Gauge Callbacks
 
-Register callbacks that are evaluated at scrape time:
+Register callbacks that are evaluated at scrape time. The value is not
+stored. If a callback fails, the error is reported and that gauge is not in
+the scrape.
 
 ```php
 use Smart145\Prometheus\Facades\Prometheus;
@@ -186,11 +290,11 @@ Prometheus::registerGaugeCallback(
 Clear all stored metrics:
 
 ```bash
-# Via query parameter (default: ?wipe=true)
-curl "https://your-app.com/prometheus?wipe=true"
+# Via query parameter (default: ?wipe=1)
+curl "https://your-app.com/prometheus?wipe=1"
 ```
 
-This returns the current metrics and then clears storage, useful for push-gateway style setups.
+This returns the current metrics and clears storage in the same step. Read [Wipe Modes](#wipe-modes) before you use it for each scrape.
 
 ## Prometheus Server Configuration
 
@@ -242,7 +346,7 @@ volumes:
 
 ## Grafana Queries
 
-Example PromQL queries for Grafana dashboards:
+Example PromQL queries for Grafana dashboards, without wipe (the default):
 
 ```promql
 # Request rate per second
@@ -261,6 +365,25 @@ sum(rate(app_requests_total{status=~"5.."}[5m])) / sum(rate(app_requests_total[5
 app_active_connections
 ```
 
+The same queries when each scrape wipes the metrics:
+
+```promql
+# Requests in the last 5 minutes
+sum(sum_over_time(app_requests_total[5m]))
+
+# Requests per second, average of the last 5 minutes
+sum(sum_over_time(app_requests_total[5m])) / 300
+
+# Average request duration
+sum(sum_over_time(app_request_duration_seconds_sum[5m])) / sum(sum_over_time(app_request_duration_seconds_count[5m]))
+
+# 95th percentile request duration
+histogram_quantile(0.95, sum by (le) (sum_over_time(app_request_duration_seconds_bucket[5m])))
+
+# Error rate percentage
+sum(sum_over_time(app_requests_total{status=~"5.."}[5m])) / sum(sum_over_time(app_requests_total[5m])) * 100
+```
+
 ## Testing
 
 Run the package tests:
@@ -268,6 +391,12 @@ Run the package tests:
 ```bash
 composer install
 vendor/bin/phpunit
+```
+
+The storage tests need a Redis server. They are skipped when none answers:
+
+```bash
+REDIS_HOST=127.0.0.1 REDIS_PORT=6379 vendor/bin/phpunit
 ```
 
 ## License

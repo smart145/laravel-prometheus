@@ -51,7 +51,9 @@ class CounterBuilder
      */
     public function incBy(int|float $value, array $labelValues = []): void
     {
-        if (! $this->validateLabels($this->counter->getName(), $this->counter->getLabelNames(), $labelValues)) {
+        $labelValues = $this->resolveLabelValues($this->counter->getName(), $this->counter->getLabelNames(), $labelValues);
+
+        if ($labelValues === null || ! $this->validateIncrement($this->counter->getName(), $value, false)) {
             return;
         }
 
