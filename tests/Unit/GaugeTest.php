@@ -226,4 +226,41 @@ class GaugeTest extends TestCase
         $this->assertStringNotContainsString('test_nothing', $output);
         $this->assertStringContainsString("test_text 17\n", $output);
     }
+
+    public function test_gauge_callback_with_invalid_names_or_label_values_is_skipped(): void
+    {
+        $prometheus = $this->freshPrometheus();
+
+        $prometheus->registerGaugeCallback('bad-name', 'Bad', fn () => 1);
+        $prometheus->registerGaugeCallback('bad_label', 'Bad', fn () => 1, ['tenant-id'], ['a']);
+        $prometheus->registerGaugeCallback('bad_value', 'Bad', fn () => 1, ['tenant'], [new \stdClass()]);
+        $prometheus->registerGaugeCallback('good', 'Good', fn () => 2, ['tenant'], ['acme']);
+
+        $output = $prometheus->render();
+
+        $this->assertStringNotContainsString('bad', $output);
+        $this->assertStringContainsString('test_good{tenant="acme"} 2', $output);
+    }
+
+    public function test_gauge_callback_with_an_empty_namespace_has_no_leading_underscore(): void
+    {
+        config(['prometheus.namespace' => '']);
+
+        $prometheus = $this->freshPrometheus();
+        $prometheus->registerGaugeCallback('users', 'Users', fn () => 7);
+
+        $this->assertStringContainsString("# TYPE users gauge\nusers 7\n", $prometheus->render());
+    }
+
+    public function test_gauge_callback_with_other_label_names_than_a_stored_gauge_is_rendered(): void
+    {
+        $prometheus = $this->freshPrometheus();
+        $prometheus->gauge('workers', 'Workers', ['host'])->set(1, ['a']);
+        $prometheus->registerGaugeCallback('workers', 'Workers', fn () => 3, ['queue'], ['default']);
+
+        $output = $prometheus->render();
+
+        $this->assertStringContainsString('test_workers{host="a"} 1', $output);
+        $this->assertStringContainsString('test_workers{queue="default"} 3', $output);
+    }
 }

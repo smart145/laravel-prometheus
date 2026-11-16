@@ -29,12 +29,13 @@ final class Number
             return $value > 0 ? '+Inf' : '-Inf';
         }
 
-        if (floor($value) === $value && abs($value) < 1e15) {
+        if (floor($value) === $value && abs($value) < 1e15 && abs($value) < PHP_INT_MAX) {
             return (string) (int) $value;
         }
 
         foreach ([15, 16, 17] as $precision) {
-            $text = sprintf('%.' . $precision . 'G', $value);
+            // %H is %G without the locale: the decimal separator is always a point.
+            $text = sprintf('%.' . $precision . 'H', $value);
 
             if ((float) $text === $value) {
                 break;

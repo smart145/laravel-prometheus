@@ -178,6 +178,23 @@ redis.call('set', KEYS[2], '2')
 return 'OK'
 LUA;
 
+    /**
+     * Delete a corrupted sample, but only if it is still the collected one.
+     *
+     * KEYS: sample, sample index. ARGV: sample hash, collected labelValues,
+     * collected labelNames ('' if the sample has none).
+     */
+    private const CLEAN_SCRIPT = <<<'LUA'
+local labelValues = redis.call('hget', KEYS[1], 'labelValues') or ''
+local labelNames = redis.call('hget', KEYS[1], 'labelNames') or ''
+if labelValues == ARGV[2] and labelNames == ARGV[3] then
+    redis.call('del', KEYS[1])
+    redis.call('srem', KEYS[2], ARGV[1])
+    return 1
+end
+return 0
+LUA;
+
     private ?Connection $connection = null;
 
     public function __construct(
@@ -248,13 +265,13 @@ LUA;
             $meta = $this->toAssociative($rawMeta);
             $samples = [];
 
-            foreach ($rawSamples as [$hash, $rawSample]) {
+            foreach ($this->mergeSamplesOfOneSeries((string) $type, $meta, $rawSamples) as [$hash, $sample]) {
                 $samples = array_merge($samples, $this->buildSamples(
                     (string) $type,
                     (string) $name,
                     $meta,
                     (string) $hash,
-                    $this->toAssociative($rawSample),
+                    $sample,
                     $wipeMode === '1' || ($wipeMode === '2' && $type !== Gauge::TYPE)
                 ));
             }
@@ -280,6 +297,65 @@ LUA;
         }
 
         return $metrics;
+    }
+
+    /**
+     * Merge stored samples that are the same series.
+     *
+     * Version 1.0 built the sample key from the raw label values, so `[200]`
+     * and `['200']` are two keys. Both render as `status="200"`, and a scrape
+     * must not contain one series twice. Counters and histograms are added.
+     * For a gauge, the sample that was written last wins.
+     *
+     * @param  array<int, array{0: string, 1: array<int, string>}>  $rawSamples
+     * @return array<int, array{0: string, 1: array<string, string>}>
+     */
+    private function mergeSamplesOfOneSeries(string $type, array $meta, array $rawSamples): array
+    {
+        $text = fn (mixed $v): string => is_scalar($v) || $v === null ? (string) $v : (string) json_encode($v);
+        $merged = [];
+
+        foreach ($rawSamples as [$hash, $rawSample]) {
+            $sample = $this->toAssociative($rawSample);
+            $labelNames = $sample['labelNames'] ?? $meta['labelNames'] ?? '[]';
+            $labelValues = json_decode($sample['labelValues'] ?? '[]', true);
+            $names = json_decode($labelNames, true);
+
+            // A corrupted sample stays alone: buildSamples() reports and cleans it.
+            $series = is_array($labelValues) && is_array($names) && count($names) === count($labelValues)
+                ? $labelNames . '|' . json_encode(array_map($text, $labelValues))
+                : 'corrupted|' . $hash;
+
+            if (! isset($merged[$series])) {
+                $merged[$series] = [(string) $hash, $sample];
+
+                continue;
+            }
+
+            $kept = $merged[$series][1];
+
+            if ($type === Gauge::TYPE) {
+                if ((int) ($sample['updated'] ?? 0) >= (int) ($kept['updated'] ?? 0)) {
+                    $merged[$series] = [(string) $hash, $sample];
+                }
+
+                continue;
+            }
+
+            foreach ($sample as $field => $fieldValue) {
+                if ($field === 'value' || $field === 'sum') {
+                    $kept[$field] = Number::format(Number::parse($kept[$field] ?? 0) + Number::parse($fieldValue));
+                } elseif (str_starts_with($field, 'bucket_')) {
+                    $kept[$field] = (string) ((int) ($kept[$field] ?? 0) + (int) $fieldValue);
+                } elseif ($field === 'timestamp') {
+                    $kept[$field] = (string) max((int) ($kept[$field] ?? 0), (int) $fieldValue);
+                }
+            }
+
+            $merged[$series][1] = $kept;
+        }
+
+        return array_values($merged);
     }
 
     /**
@@ -311,8 +387,16 @@ LUA;
             ]);
 
             if ($clean && ! $wiped) {
-                $this->redis()->command('del', [$base . $hash]);
-                $this->redis()->command('srem', [$base . 'index', $hash]);
+                // One step, and only if no writer repaired the sample after the collect.
+                $this->redis()->eval(
+                    self::CLEAN_SCRIPT,
+                    2,
+                    $base . $hash,
+                    $base . 'index',
+                    $hash,
+                    $sample['labelValues'] ?? '',
+                    $sample['labelNames'] ?? ''
+                );
             }
 
             return [];
@@ -416,7 +500,7 @@ LUA;
         $bucketField = 'bucket_inf';
         foreach ($data['buckets'] as $bucket) {
             if ($data['value'] <= $bucket) {
-                $bucketField = 'bucket_' . $bucket;
+                $bucketField = 'bucket_' . Number::format((float) $bucket);
                 break;
             }
         }
@@ -467,7 +551,11 @@ LUA;
 
         $labelNames = (string) json_encode(array_values($data['labelNames']));
         $labelValues = array_map(
-            fn (mixed $v): string => is_scalar($v) || $v === null ? (string) $v : (string) json_encode($v),
+            fn (mixed $v): string => match (true) {
+                is_float($v) => Number::format($v),
+                is_scalar($v), $v === null => (string) $v,
+                default => (string) json_encode($v),
+            },
             array_values($data['labelValues'])
         );
         $hash = md5((string) json_encode($labelValues));

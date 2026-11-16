@@ -72,13 +72,32 @@ PROMETHEUS_LABEL_MISMATCH_BEHAVIOR=throw
 
 - Every recording is one Redis step (a Lua script). A scrape never reads a
   half-written sample.
-- A scrape reads all samples in one Redis call. It does not use `KEYS`.
+- A scrape reads all samples in one Redis call through an index. It does not
+  use `KEYS`, with one exception: the first scrape (new installation, upgrade
+  or upgrade from 1.x) scans the
+  database once with `KEYS` to add existing samples to the index.
 - The adapter needs Redis scripting (`EVAL`). It works with the `phpredis`
   and `predis` clients. It does not support Redis Cluster.
 - All application instances that share a Redis database share one set of
   metrics. Scrape one instance (for example through the load balancer), not
   every instance. If Prometheus scrapes N instances, each value is in
   Prometheus N times.
+
+### Upgrading from 1.x
+
+- Existing Redis keys keep their format. The first scrape after the upgrade
+  adds the samples of version 1.x to the index (one `KEYS` scan).
+- Deploy all application instances before that first scrape if you can. An
+  instance that still runs 1.x after the first scrape writes samples without
+  an index entry. A **new** series from such an instance is not in a scrape
+  and stays in Redis until a full wipe (`php artisan prometheus:cleanup --force`).
+  Run that command once after the last 1.x instance stopped.
+- Samples of version 1.x with a number as label value (`[200]`) are merged
+  with the samples that this version writes (`['200']`) when a scrape renders
+  them.
+- A counter now rejects a negative increment, and one name cannot be two
+  metric types. With `PROMETHEUS_LABEL_MISMATCH_BEHAVIOR=throw` (the default)
+  such a recording throws. Set `log` before the upgrade if you are not sure.
 
 ### Wipe Modes
 
@@ -204,6 +223,12 @@ Rules for correct values:
   the last value before the scrape.
 - Give a histogram buckets that fit its unit. The default buckets are for
   seconds (0.005 to 10).
+- Do not change the buckets of a histogram that has stored samples. The old
+  observations stay in the buckets that they were counted in, so `_count` and
+  `_sum` stay correct, but a new, finer bucket does not include them. Wipe
+  the metrics after a bucket change if the percentiles must be exact.
+- Do not rename a label and keep its position. A sample is found by its label
+  values, so the old sample continues under the new label name.
 
 A rejected recording follows `PROMETHEUS_LABEL_MISMATCH_BEHAVIOR`.
 

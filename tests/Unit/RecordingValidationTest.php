@@ -85,6 +85,48 @@ class RecordingValidationTest extends TestCase
         $this->assertStringContainsString("test_balance -2.5\n", $prometheus->render());
     }
 
+    public function test_float_label_values_keep_their_precision(): void
+    {
+        $prometheus = $this->freshPrometheus();
+        $counter = $prometheus->counter('ratio_total', 'Ratio', ['ratio']);
+
+        $counter->inc([1.000000000000001]);
+        $counter->inc(['1']);
+
+        $output = $prometheus->render();
+
+        $this->assertStringContainsString('test_ratio_total{ratio="1.000000000000001"} 1', $output);
+        $this->assertStringContainsString('test_ratio_total{ratio="1"} 1', $output);
+    }
+
+    public function test_label_value_that_has_no_text_form_is_rejected(): void
+    {
+        config(['prometheus.label_mismatch_behavior' => 'ignore']);
+
+        $prometheus = $this->freshPrometheus();
+        $counter = $prometheus->counter('items_total', 'Items', ['kind']);
+        $counter->inc(['']);
+        $counter->inc([[INF]]);
+
+        // The recording is skipped. It must not be added to the empty-label series.
+        $this->assertStringContainsString('test_items_total{kind=""} 1', $prometheus->render());
+    }
+
+    public function test_number_format_does_not_use_the_locale(): void
+    {
+        $locale = setlocale(LC_NUMERIC, '0');
+
+        try {
+            if (setlocale(LC_NUMERIC, 'de_DE.UTF-8', 'de_DE', 'fr_FR.UTF-8', 'fr_FR') === false) {
+                $this->markTestSkipped('No locale with a decimal comma is installed');
+            }
+
+            $this->assertSame('1.5', Number::format(1.5));
+        } finally {
+            setlocale(LC_NUMERIC, $locale);
+        }
+    }
+
     public function test_number_format_keeps_precision(): void
     {
         $this->assertSame('5', Number::format(5));

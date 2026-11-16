@@ -6,6 +6,7 @@ namespace Smart145\Prometheus\MetricBuilders;
 
 use InvalidArgumentException;
 use Smart145\Prometheus\RejectsInvalidRecordings;
+use Smart145\Prometheus\Support\Number;
 use Stringable;
 
 /**
@@ -35,6 +36,16 @@ trait ValidatesLabels
         $expectedCount = count($labelNames);
         $actualCount = count($labelValues);
 
+        foreach ($labelValues as $value) {
+            if ($this->labelValueToString($value) === null) {
+                return $this->rejectRecording(sprintf(
+                    'Metric "%s" has a label value of type %s that cannot be written as text',
+                    $metricName,
+                    get_debug_type($value)
+                ));
+            }
+        }
+
         if ($expectedCount === $actualCount) {
             return true;
         }
@@ -60,11 +71,27 @@ trait ValidatesLabels
     private function normalizeLabelValues(array $labelValues): array
     {
         return array_map(
-            fn (mixed $value): string => $value === null || is_scalar($value) || $value instanceof Stringable
-                ? (string) $value
-                : (string) json_encode($value),
+            fn (mixed $value): string => $this->labelValueToString($value) ?? '',
             array_values($labelValues)
         );
+    }
+
+    /**
+     * @return string|null  Null if the value has no text form
+     */
+    private function labelValueToString(mixed $value): ?string
+    {
+        if (is_float($value)) {
+            return Number::format($value);
+        }
+
+        if ($value === null || is_scalar($value) || $value instanceof Stringable) {
+            return (string) $value;
+        }
+
+        $json = json_encode($value);
+
+        return $json === false ? null : $json;
     }
 
     /**

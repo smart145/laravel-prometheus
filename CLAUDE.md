@@ -38,7 +38,8 @@ Use these words in code, tests, commit messages and PRs.
   sample that was not written for that many seconds.
 - **Index**: the Redis keys that list the stored metrics and samples
   (`PROMETHEUS_index`, `PROMETHEUS_<type>:<name>:index`). The adapter reads
-  through the index and never runs `KEYS` in a scrape.
+  through the index. Only the first scrape (no `PROMETHEUS_schema` key)
+  runs `KEYS`, once, to add existing samples to the index.
 - **Gauge callback**: a gauge evaluated at render time
   (`registerGaugeCallback`). Its value is not stored. A failing callback is
   reported, not thrown, and has no sample in that scrape.

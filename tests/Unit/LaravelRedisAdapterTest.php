@@ -37,7 +37,7 @@ class LaravelRedisAdapterTest extends TestCase
     {
         $connection = Mockery::mock(Connection::class);
 
-        $connection->shouldReceive('eval')->once()->andReturn([[
+        $connection->shouldReceive('eval')->once()->withArgs(fn (...$args) => ($args[2] ?? null) === 'PROMETHEUS_index')->andReturn([[
             'counter',
             'test_metric',
             ['name', 'test_metric', 'help', 'Test metric', 'labelNames', json_encode(['label1', 'label2'])],
@@ -58,12 +58,18 @@ class LaravelRedisAdapterTest extends TestCase
             ['abc123', ['value', '5', 'labelValues', json_encode([])]],
         ]);
 
-        $connection->shouldReceive('command')
-            ->with('del', ['PROMETHEUS_counter:test_metric:abc123'])
-            ->once();
-        $connection->shouldReceive('command')
-            ->with('srem', ['PROMETHEUS_counter:test_metric:index', 'abc123'])
-            ->once();
+        // The cleanup is one script that names the sample, its index and the collected content.
+        $connection->shouldReceive('eval')
+            ->once()
+            ->with(
+                Mockery::type('string'),
+                2,
+                'PROMETHEUS_counter:test_metric:abc123',
+                'PROMETHEUS_counter:test_metric:index',
+                'abc123',
+                json_encode([]),
+                ''
+            );
 
         Log::shouldReceive('warning')
             ->once()

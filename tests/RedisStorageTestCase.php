@@ -328,6 +328,74 @@ abstract class RedisStorageTestCase extends TestCase
         $this->assertStringContainsString('test_legacy_total{state="paid"} 8', $this->process()->render());
     }
 
+    public function test_sample_of_an_earlier_version_with_an_integer_label_is_not_a_second_series(): void
+    {
+        // Version 1.0 built the key from the raw label values: [200], not ["200"].
+        $redis = $this->redis();
+        $redis->command('hMSet', ['PROMETHEUS_counter:test_http_total:meta', [
+            'name' => 'test_http_total', 'help' => 'HTTP', 'labelNames' => json_encode(['status']),
+        ]]);
+        $redis->command('hMSet', ['PROMETHEUS_counter:test_http_total:' . md5(json_encode([200])), [
+            'value' => '7', 'labelValues' => json_encode([200]),
+        ]]);
+
+        $this->process()->counter('http_total', 'HTTP', ['status'])->inc(['200']);
+
+        $output = $this->process()->render();
+
+        $this->assertSame(1, substr_count($output, 'test_http_total{status="200"}'));
+        $this->assertStringContainsString('test_http_total{status="200"} 8', $output);
+    }
+
+    public function test_corrupted_sample_cleanup_keeps_a_sample_that_a_writer_repaired(): void
+    {
+        config(['prometheus.auto_clean_corrupted_samples' => true]);
+        Log::spy();
+
+        $prometheus = $this->process();
+        $prometheus->counter('pay_total', 'Pay', ['currency'])->inc(['eur']);
+        $key = 'PROMETHEUS_counter:test_pay_total:' . md5(json_encode(['eur']));
+
+        // The collect script saw a corrupted sample; a writer repaired it before the cleanup.
+        $clean = new \ReflectionClassConstant(LaravelRedisAdapter::class, 'CLEAN_SCRIPT');
+        $deleted = $this->redis()->eval(
+            $clean->getValue(),
+            2,
+            $key,
+            'PROMETHEUS_counter:test_pay_total:index',
+            md5(json_encode(['eur'])),
+            json_encode([]),
+            ''
+        );
+
+        $this->assertSame(0, (int) $deleted);
+        $this->assertStringContainsString('test_pay_total{currency="eur"} 1', $prometheus->render());
+    }
+
+    public function test_gauge_callback_replaces_a_stored_sample_with_the_same_labels_in_another_order(): void
+    {
+        $prometheus = $this->process();
+        $prometheus->gauge('workers', 'Workers', ['tenant', 'region'])->set(1, ['acme', 'us']);
+        $prometheus->registerGaugeCallback('workers', 'Workers', fn () => 5, ['region', 'tenant'], ['us', 'acme']);
+
+        $output = $prometheus->render();
+
+        $this->assertSame(1, substr_count($output, 'test_workers{'));
+        $this->assertStringContainsString('test_workers{region="us",tenant="acme"} 5', $output);
+    }
+
+    public function test_gauge_callback_with_the_name_of_a_stored_counter_keeps_the_counter(): void
+    {
+        $prometheus = $this->process();
+        $prometheus->counter('jobs', 'Jobs')->incBy(4);
+        $prometheus->registerGaugeCallback('jobs', 'Jobs', fn () => 9);
+
+        $output = $prometheus->render();
+
+        $this->assertStringContainsString("# TYPE test_jobs counter\ntest_jobs 4\n", $output);
+        $this->assertStringNotContainsString('test_jobs 9', $output);
+    }
+
     public function test_corrupted_sample_is_removed_and_other_samples_render(): void
     {
         config(['prometheus.auto_clean_corrupted_samples' => true]);
